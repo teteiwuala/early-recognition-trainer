@@ -613,6 +613,16 @@
   #voice-state.bad  { color: var(--status-critical); border-color: color-mix(in srgb, var(--status-critical) 55%, var(--border)); }
   .voice-hint { font-size: 11.5px; color: var(--ink-muted); }
 
+  /* ---------- headset preview framing ----------
+     A soft lens vignette so the flat preview reads as "through a headset"
+     rather than as the desktop scene. Purely decorative, never interactive. */
+  body.preview-on #scene3d::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    background: radial-gradient(ellipse 62% 74% at 50% 50%, transparent 58%, rgba(0,0,0,.78) 100%);
+  }
+  body.preview-on #btn-preview { border-color: var(--cat-attention); color: var(--cat-attention); }
+  #btn-preview[aria-pressed="true"]::after { content: " · on"; opacity: .7; }
+
   /* ---------- accessibility: focus + reduced motion ---------- */
   .mic-btn:focus-visible, .instructor-panel-actions button:focus-visible,
   .instructor-replay-btn:focus-visible, #try-again:focus-visible,
@@ -663,6 +673,14 @@
   }
   #btn-vr:hover { background: linear-gradient(180deg, #35dfe0, #21b9ba); }
   #btn-vr:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  #btn-preview {
+    font: inherit; font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+    padding: 9px 15px; border-radius: 10px; cursor: pointer; margin-left: 8px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink-secondary);
+    box-shadow: inset 0 1px 0 var(--hud-edge), var(--shadow);
+  }
+  #btn-preview:hover { background: var(--surface-alt); color: var(--ink); }
+  #btn-preview:focus-visible { outline: 2px solid var(--cat-attention); outline-offset: 2px; }
 
 </style>
 </head>
@@ -689,6 +707,9 @@
         <!-- Shown only when the browser reports immersive-vr support (Quest
              browser). Absent on desktop, so flat mode is unchanged. -->
         <button id="btn-vr" class="hidden" type="button">Enter VR</button>
+        <!-- Shown always: lets anyone without a headset see the VR view on screen. -->
+        <button id="btn-preview" type="button" aria-pressed="false"
+                title="See the headset view on this screen">Headset view</button>
         <div id="clock-pill"><span class="clock-dot"></span><span id="clock">00:00</span></div>
       </div>
     </div>
@@ -1993,6 +2014,7 @@ const DebriefRenderer = (function () {
     dragging: false, lastX: 0, lastY: 0, moved: 0,
   };
   function applyOrbit() {
+    if (typeof preview !== 'undefined' && preview.on) return;  // preview owns the camera
     orbit.phi = Math.max(0.2, Math.min(1.35, orbit.phi));
     orbit.radius = Math.max(1.2, Math.min(4.5, orbit.radius));
     camera.position.set(
@@ -2003,6 +2025,7 @@ const DebriefRenderer = (function () {
     camera.lookAt(orbit.target);
   }
   renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (typeof preview !== 'undefined' && preview.on) return;
     orbit.dragging = true; orbit.moved = 0; orbit.lastX = e.clientX; orbit.lastY = e.clientY;
     renderer.domElement.setPointerCapture(e.pointerId);
   });
@@ -2260,6 +2283,7 @@ const DebriefRenderer = (function () {
   // near-side right hand ~0.6 m ahead (within reach), IV bag up and to the
   // right. Verified against the scene's own coordinates, not guessed.
   const WORLD_XR = { pos: new THREE.Vector3(0.15, 0, -1.05), rotY: -Math.PI / 2 };
+  const WORLD_FLAT = { pos: new THREE.Vector3(0, 0, 0), rotY: 0 };
 
   function applyWorldPlacement(p) {
     world.position.copy(p.pos);
@@ -2803,6 +2827,63 @@ const DebriefRenderer = (function () {
        SimEngine.logProcedure(key, label)
      SimEngine itself is NOT modified by this fragment. */
 
+  // ---------- headset preview (flat screen, real scene) -----------------------------
+  // Shows exactly what the trainee sees in VR without a headset: the room moved
+  // to the XR origin, the in-world panels visible, and the camera at standing
+  // eye height with mouse-look instead of head-look. This is NOT a mockup —
+  // it is the same scene graph, the same panels and the same interaction code,
+  // so what you demo here is what happens in the headset. Useful for showing
+  // educators the VR flow on a laptop.
+  const preview = { on: false, yaw: 0, pitch: 0, dragging: false, lastX: 0, lastY: 0 };
+
+  function previewApply() {
+    // Look direction: forward is -Z after the world placement, matching XR.
+    const cp = Math.cos(preview.pitch);
+    camera.position.copy(EYE);
+    camera.lookAt(
+      EYE.x + Math.sin(preview.yaw) * cp,
+      EYE.y + Math.sin(preview.pitch),
+      EYE.z - Math.cos(preview.yaw) * cp
+    );
+  }
+
+  function setPreview(on) {
+    if (renderer.xr.isPresenting) return;      // XR itself owns the camera
+    preview.on = on;
+    document.body.classList.toggle('preview-on', on);
+    const btn = document.getElementById('btn-preview');
+    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      preview.yaw = 0; preview.pitch = -0.12;
+      applyWorldPlacement(WORLD_XR);           // same placement XR uses
+      xrUI.visible = true;                     // the in-world panels
+      previewApply();
+      setFeedback('Headset preview.', 'This is the view in VR. Drag to look around; the floating panel is the in-world menu.');
+    } else {
+      applyWorldPlacement(WORLD_FLAT);
+      xrUI.visible = false;
+      applyOrbit();
+    }
+  }
+
+  // Mouse-look while previewing; the orbit handlers bail out when preview is on.
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (!preview.on) return;
+    preview.dragging = true; preview.lastX = e.clientX; preview.lastY = e.clientY;
+  });
+  renderer.domElement.addEventListener('pointermove', (e) => {
+    if (!preview.on || !preview.dragging) return;
+    preview.yaw   -= (e.clientX - preview.lastX) * 0.004;
+    preview.pitch -= (e.clientY - preview.lastY) * 0.004;
+    preview.pitch = Math.max(-0.85, Math.min(0.6, preview.pitch));
+    preview.lastX = e.clientX; preview.lastY = e.clientY;
+    previewApply();
+  });
+  window.addEventListener('pointerup', () => { preview.dragging = false; });
+
+  const btnPreview = document.getElementById('btn-preview');
+  if (btnPreview) btnPreview.addEventListener('click', () => setPreview(!preview.on));
+
   // ---------- raycast picking -------------------------------------------------------
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
@@ -2817,6 +2898,28 @@ const DebriefRenderer = (function () {
     ivBag.material.emissiveIntensity = 0.15;
     SimEngine.logProcedure('iv_miss', 'IV insertion attempt missed');
     setFeedback('IV:', 'The line swings free — grab the bag and try again.');
+  }
+
+  // In preview mode the mouse stands in for a controller ray: it must be able
+  // to press the floating panel buttons, or the preview would look like VR but
+  // not behave like it.
+  function previewPick(e) {
+    const r = renderer.domElement.getBoundingClientRect();
+    pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+    pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    rebuildXRTargets();
+    const hits = raycaster.intersectObjects(xrTargetList, false);
+    if (!hits.length) { if (!modal.visible) dropIVOnNothing(); return; }
+    const obj = hits[0].object;
+    if (obj.name === 'xrbtn') {
+      const fn = obj.userData.action;
+      if (typeof fn === 'function') fn();
+      return;
+    }
+    if (modal.visible) return;
+    if (!SimEngine.getState().running) return;
+    activateTarget(obj.name);
   }
 
   function activateTarget(name) {
@@ -2847,6 +2950,9 @@ const DebriefRenderer = (function () {
 
   renderer.domElement.addEventListener('click', (e) => {
     if (renderer.xr.isPresenting) return;            // XR input is handled below
+    // Preview mode routes through previewPick so the in-world panel buttons and
+    // the modal are pickable, exactly as a controller ray would find them.
+    if (preview.on) { previewPick(e); return; }
     if (orbit.moved > 6) return;                     // that was a camera drag, not a pick
     if (!SimEngine.getState().running) return;
     pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
