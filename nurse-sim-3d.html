@@ -2028,7 +2028,32 @@ const DebriefRenderer = (function () {
 
   // ---------- renderer / scene / camera ----------------------------------
   const canvasWrap = document.getElementById('scene3d');
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  // WebGL can be unavailable for reasons that have nothing to do with this page:
+  // Brave's fingerprinting Shields, hardware acceleration switched off, an old
+  // driver, or a locked-down work machine. Fail with an explanation the user can
+  // act on rather than an exception nobody can read.
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+  } catch (glErr) {
+    var box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;z-index:99998;display:flex;align-items:center;' +
+      'justify-content:center;padding:32px;background:#0d1416;color:#dfe9e8;' +
+      'font:15px/1.7 -apple-system,Segoe UI,Roboto,sans-serif;text-align:center';
+    box.innerHTML = '<div style="max-width:34em">' +
+      '<div style="font-size:19px;font-weight:700;margin-bottom:10px">3D can\u2019t start \u2014 WebGL is blocked</div>' +
+      '<p>This browser will not give the page a 3D drawing surface, so the room cannot be rendered. ' +
+      'The simulation itself is fine; only the display is blocked.</p>' +
+      '<p style="text-align:left"><b>Usual causes, most likely first:</b><br>' +
+      '\u2022 <b>Brave Shields</b> \u2014 click the lion icon in the address bar and set Shields to <b>Down</b> for this site, then reload.<br>' +
+      '\u2022 Hardware acceleration switched off in browser settings.<br>' +
+      '\u2022 A managed or locked-down machine that disables WebGL.</p>' +
+      '<p>The <a href="nurse-sepsis-trainer.html" style="color:#7fd3c8">2D simulation</a> needs no WebGL and works anywhere.</p>' +
+      '<p style="color:#8b9c9b;font-size:13px">Reported by the browser: ' +
+      String(glErr && glErr.message ? glErr.message : glErr) + '</p></div>';
+    document.body.appendChild(box);
+    return;                                  // stop the module cleanly
+  }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
