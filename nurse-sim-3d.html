@@ -2013,8 +2013,13 @@ const DebriefRenderer = (function () {
     theta: -0.5, phi: 1.05, radius: 2.6,
     dragging: false, lastX: 0, lastY: 0, moved: 0,
   };
+  // Declared HERE, above applyOrbit, deliberately: applyOrbit() runs during
+  // startup, and a `typeof` check does NOT shield a `const` that is still in
+  // its temporal dead zone — it throws ReferenceError and kills the script.
+  // The preview behaviour itself lives further down; this is just its state.
+  const preview = { on: false, yaw: 0, pitch: 0, dragging: false, lastX: 0, lastY: 0 };
   function applyOrbit() {
-    if (typeof preview !== 'undefined' && preview.on) return;  // preview owns the camera
+    if (preview.on) return;                        // preview owns the camera
     orbit.phi = Math.max(0.2, Math.min(1.35, orbit.phi));
     orbit.radius = Math.max(1.2, Math.min(4.5, orbit.radius));
     camera.position.set(
@@ -2025,7 +2030,7 @@ const DebriefRenderer = (function () {
     camera.lookAt(orbit.target);
   }
   renderer.domElement.addEventListener('pointerdown', (e) => {
-    if (typeof preview !== 'undefined' && preview.on) return;
+    if (preview.on) return;
     orbit.dragging = true; orbit.moved = 0; orbit.lastX = e.clientX; orbit.lastY = e.clientY;
     renderer.domElement.setPointerCapture(e.pointerId);
   });
@@ -2834,7 +2839,6 @@ const DebriefRenderer = (function () {
   // it is the same scene graph, the same panels and the same interaction code,
   // so what you demo here is what happens in the headset. Useful for showing
   // educators the VR flow on a laptop.
-  const preview = { on: false, yaw: 0, pitch: 0, dragging: false, lastX: 0, lastY: 0 };
 
   function previewApply() {
     // Look direction: forward is -Z after the world placement, matching XR.
