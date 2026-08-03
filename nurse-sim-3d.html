@@ -1996,6 +1996,36 @@ const DebriefRenderer = (function () {
 
 <!-- END REPLACEMENT CODE -->
 
+/* Restored after the engine swap: this module lived inside the old
+   Module 1+2 span and was removed with it, while Module 3 still calls
+   VoiceInput for the check-in dictation buttons. Byte-copied from
+   nurse-sepsis-trainer.html so both builds behave identically. */
+// ---- Voice input: speech recognition dictation for the check-in fields ----
+// (best-effort, browser-dependent; typing always works). The instructor's
+// spoken voice was removed pending a replacement voice agent.
+const VoiceInput = (function () {
+  const RecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const sttSupported = !!RecognitionCtor;
+
+  function listenInto(fieldEl, onDone) {
+    if (!sttSupported) { if (onDone) onDone(); return; }
+    const rec = new RecognitionCtor();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (e) => {
+      const text = e.results[0][0].transcript;
+      fieldEl.value = (fieldEl.value ? fieldEl.value + ' ' : '') + text;
+    };
+    rec.onend = () => { if (onDone) onDone(); };
+    rec.onerror = () => { if (onDone) onDone(); };
+    rec.start();
+  }
+
+  return { sttSupported, listenInto };
+})();
+
+
 /* =====================================================================
    MODULE 3-3D: THREE.JS RENDER + UI GLUE (desktop 3D-lite, VR Phase 1)
    ---------------------------------------------------------------------
@@ -2907,14 +2937,15 @@ const DebriefRenderer = (function () {
   // so what you demo here is what happens in the headset. Useful for showing
   // educators the VR flow on a laptop.
 
+  const PREVIEW_BACK = 0.75;   // metres behind the XR standing spot, flat-camera only
   function previewApply() {
     // Look direction: forward is -Z after the world placement, matching XR.
     const cp = Math.cos(preview.pitch);
-    camera.position.copy(EYE);
+    camera.position.set(EYE.x, EYE.y, EYE.z + PREVIEW_BACK);
     camera.lookAt(
-      EYE.x + Math.sin(preview.yaw) * cp,
-      EYE.y + Math.sin(preview.pitch),
-      EYE.z - Math.cos(preview.yaw) * cp
+      camera.position.x + Math.sin(preview.yaw) * cp,
+      camera.position.y + Math.sin(preview.pitch),
+      camera.position.z - Math.cos(preview.yaw) * cp
     );
   }
 
@@ -2925,7 +2956,7 @@ const DebriefRenderer = (function () {
     const btn = document.getElementById('btn-preview');
     if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (on) {
-      preview.yaw = 0; preview.pitch = -0.12;
+      preview.yaw = 0; preview.pitch = -0.30;
       applyWorldPlacement(WORLD_XR);           // same placement XR uses
       xrUI.visible = true;                     // the in-world panels
       previewApply();
@@ -3101,7 +3132,7 @@ const DebriefRenderer = (function () {
 
   // ---- status strip: clock + latest feedback line, above the bed -------------
   const statusP = makePanel(1024, 176, 1.0, 0.172);
-  statusP.mesh.position.set(0.15, 1.64, -1.05);
+  statusP.mesh.position.set(0.15, 1.72, -1.35);
   statusP.mesh.lookAt(EYE);
   xrUI.add(statusP.mesh);
 
@@ -3172,7 +3203,7 @@ const DebriefRenderer = (function () {
   });
   // To the trainee's right, at hip/waist height, angled up at the eyes so it
   // never blocks the view of the patient.
-  actionPanel.position.set(0.40, 1.05, -0.30);
+  actionPanel.position.set(0.56, 0.98, -0.26);   // off to the side, clear of the patient
   actionPanel.lookAt(EYE);
   xrUI.add(actionPanel);
 
