@@ -2938,6 +2938,8 @@ const VoiceInput = (function () {
   // educators the VR flow on a laptop.
 
   const PREVIEW_BACK = 0.75;   // metres behind the XR standing spot, flat-camera only
+  const PREVIEW_FOV = 88;      // closer to a headset's field of view than 55
+  const FLAT_FOV = 55;
   function previewApply() {
     // Look direction: forward is -Z after the world placement, matching XR.
     const cp = Math.cos(preview.pitch);
@@ -2959,11 +2961,15 @@ const VoiceInput = (function () {
       preview.yaw = 0; preview.pitch = -0.30;
       applyWorldPlacement(WORLD_XR);           // same placement XR uses
       xrUI.visible = true;                     // the in-world panels
+      camera.fov = PREVIEW_FOV;                // headset-like FOV, so nothing is cropped away
+      camera.updateProjectionMatrix();
       previewApply();
       setFeedback('Headset preview.', 'This is the view in VR. Drag to look around; the floating panel is the in-world menu.');
     } else {
       applyWorldPlacement(WORLD_FLAT);
       xrUI.visible = false;
+      camera.fov = FLAT_FOV;
+      camera.updateProjectionMatrix();
       applyOrbit();
     }
   }
@@ -3203,7 +3209,7 @@ const VoiceInput = (function () {
   });
   // To the trainee's right, at hip/waist height, angled up at the eyes so it
   // never blocks the view of the patient.
-  actionPanel.position.set(0.56, 0.98, -0.26);   // off to the side, clear of the patient
+  actionPanel.position.set(0.44, 1.00, -0.42);   // to the side, but fully inside the field of view
   actionPanel.lookAt(EYE);
   xrUI.add(actionPanel);
 
