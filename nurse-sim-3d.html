@@ -2331,7 +2331,6 @@ const DebriefRenderer = (function () {
   // near-side right hand ~0.6 m ahead (within reach), IV bag up and to the
   // right. Verified against the scene's own coordinates, not guessed.
   const WORLD_XR = { pos: new THREE.Vector3(0.15, 0, -1.05), rotY: -Math.PI / 2 };
-  const WORLD_FLAT = { pos: new THREE.Vector3(0, 0, 0), rotY: 0 };
 
   function applyWorldPlacement(p) {
     world.position.copy(p.pos);
