@@ -2895,6 +2895,23 @@ const VoiceInput = (function () {
         recordSpoken(p && p.notice, p && p.interpret, 'spoken');
         return '';
       },
+
+      // Equipment on request. What they ask for is evidence of what they think
+      // is happening, so the request itself is logged. An honest "not stocked"
+      // matters: in a remote station, not having something IS the lesson.
+      spawn_item: async (p) => {
+        const asked = (p && p.item) || '';
+        const r = spawnItem(asked, p && p.hand_over);
+        if (!r.ok) {
+          SimEngine.logProcedure('item_missing', 'Asked for "' + String(asked).slice(0, 60) + '" — not stocked');
+          setFeedback('Supplies:', 'Nothing here matches "' + String(asked).slice(0, 40) + '".');
+          return 'Not stocked here — I could not find that in this room.';
+        }
+        setFeedback('Supplies:', (r.handed ? 'Handed you ' : 'Set down ') + r.label + '.');
+        return r.handed
+          ? "Here — " + r.label + ", in your hand."
+          : "I've set " + r.label + " down on the table beside you.";
+      },
     };
 
     // ---- audio: base64 <-> PCM -------------------------------------------
@@ -3242,6 +3259,196 @@ const VoiceInput = (function () {
   const btnPreview = document.getElementById('btn-preview');
   if (btnPreview) btnPreview.addEventListener('click', () => setPreview(!preview.on));
 
+
+  /* =====================================================================
+     EQUIPMENT ON REQUEST ("generative" supply)
+     ---------------------------------------------------------------------
+     The trainee asks the instructor for a thing; it appears in their hand.
+     The intelligence is in the INTERPRETATION — the language model decides
+     what "I need a bandaid" means and calls spawn_item — while the geometry
+     is built here from primitives. Runtime text-to-3D was rejected on
+     latency: 30s-to-minutes per mesh is unusable inside a 6-minute
+     deteriorating scenario, and this is instant and works offline.
+     What the trainee ASKS FOR is itself evidence of what they think is
+     happening, so every request is logged to the debrief.
+     ===================================================================== */
+  const ITEM_MATS = {
+    gauze:  new THREE.MeshStandardMaterial({ color: 0xf4f2ea, roughness: .95 }),
+    tape:   new THREE.MeshStandardMaterial({ color: 0xe8d9b5, roughness: .8 }),
+    skinTn: new THREE.MeshStandardMaterial({ color: 0xd9b68c, roughness: .85 }),
+    plastic:new THREE.MeshStandardMaterial({ color: 0x2c3a42, roughness: .7 }),
+    clear:  new THREE.MeshStandardMaterial({ color: 0xcfe4ee, roughness: .25, transparent: true, opacity: .55 }),
+    metal:  new THREE.MeshStandardMaterial({ color: 0xbfc8ce, roughness: .35, metalness: .7 }),
+    blue:   new THREE.MeshStandardMaterial({ color: 0x3f7fb5, roughness: .7 }),
+    rubber: new THREE.MeshStandardMaterial({ color: 0x2f6f52, roughness: .9 }),
+  };
+  function cube(w, hh, d, mat, x, y, z) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, hh, d), mat);
+    m.position.set(x || 0, y || 0, z || 0);
+    return m;
+  }
+  function cyl(rt, rb, hh, mat, rotX) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, hh, 12), mat);
+    if (rotX) m.rotation.x = rotX;
+    return m;
+  }
+  // Each builder returns a small Group, roughly life-sized in metres.
+  const ITEM_BUILDERS = {
+    plaster: () => { const g = new THREE.Group();
+      g.add(cube(0.075, 0.004, 0.024, ITEM_MATS.skinTn));
+      g.add(cube(0.022, 0.005, 0.020, ITEM_MATS.gauze, 0, 0.001, 0)); return g; },
+    gauze: () => { const g = new THREE.Group();
+      g.add(cube(0.075, 0.020, 0.075, ITEM_MATS.gauze)); return g; },
+    pressure_dressing: () => { const g = new THREE.Group();
+      g.add(cyl(0.035, 0.035, 0.055, ITEM_MATS.gauze, Math.PI / 2));
+      g.add(cube(0.055, 0.006, 0.030, ITEM_MATS.tape, 0, 0.032, 0)); return g; },
+    tape: () => { const g = new THREE.Group();
+      const r = new THREE.Mesh(new THREE.TorusGeometry(0.030, 0.012, 8, 16), ITEM_MATS.tape);
+      r.rotation.x = Math.PI / 2; g.add(r); return g; },
+    gloves: () => { const g = new THREE.Group();
+      g.add(cube(0.085, 0.012, 0.055, ITEM_MATS.blue));
+      g.add(cube(0.030, 0.010, 0.045, ITEM_MATS.blue, 0.052, 0.002, 0)); return g; },
+    syringe: () => { const g = new THREE.Group();
+      g.add(cyl(0.010, 0.010, 0.085, ITEM_MATS.clear, Math.PI / 2));
+      g.add(cyl(0.0015, 0.0015, 0.035, ITEM_MATS.metal, Math.PI / 2).translateZ(0));
+      const nd = g.children[1]; nd.position.z = 0.058;
+      g.add(cube(0.020, 0.004, 0.008, ITEM_MATS.plastic, 0, 0, -0.046)); return g; },
+    tourniquet: () => { const g = new THREE.Group();
+      const b = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 6, 18), ITEM_MATS.rubber);
+      b.rotation.x = Math.PI / 2.4; g.add(b); return g; },
+    penlight: () => { const g = new THREE.Group();
+      g.add(cyl(0.008, 0.008, 0.090, ITEM_MATS.metal, Math.PI / 2));
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.007, 10, 8),
+        new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xfff0c0, emissiveIntensity: 1.4 }));
+      bulb.position.z = 0.05; g.add(bulb); return g; },
+    thermometer: () => { const g = new THREE.Group();
+      g.add(cube(0.018, 0.010, 0.105, ITEM_MATS.gauze));
+      g.add(cube(0.012, 0.004, 0.016, ITEM_MATS.plastic, 0, 0.006, -0.02)); return g; },
+    oxygen_mask: () => { const g = new THREE.Group();
+      const cup = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10, 0, Math.PI * 2, 0, Math.PI / 2), ITEM_MATS.clear);
+      cup.rotation.x = Math.PI; g.add(cup);
+      g.add(cyl(0.010, 0.010, 0.10, ITEM_MATS.clear, Math.PI / 2).translateZ(0));
+      g.children[1].position.set(0, -0.03, 0.05); return g; },
+    glucometer: () => { const g = new THREE.Group();
+      g.add(cube(0.045, 0.014, 0.085, ITEM_MATS.plastic));
+      g.add(cube(0.030, 0.003, 0.026, new THREE.MeshStandardMaterial({ color: 0x8fd6c4, emissive: 0x4fae98, emissiveIntensity: .6 }), 0, 0.009, -0.018));
+      g.add(cube(0.008, 0.003, 0.030, ITEM_MATS.gauze, 0.026, 0.006, 0.030)); return g; },
+  };
+  // What the trainee might say -> which builder. Loose on purpose: people ask
+  // for "a bandaid", "plaster", "something for the bleeding".
+  const ITEM_ALIASES = [
+    [['plaster','band aid','bandaid','band-aid','sticking'], 'plaster'],
+    [['pressure','bleed','haemorrhage','hemorrhage','trauma dressing','stop the'], 'pressure_dressing'],
+    [['gauze','swab','dressing','compress','pad'], 'gauze'],
+    [['tape','micropore','strapping'], 'tape'],
+    [['glove'], 'gloves'],
+    [['syringe','needle','inject','draw up'], 'syringe'],
+    [['tourniquet','band','constrict'], 'tourniquet'],
+    [['penlight','torch','pupil','light'], 'penlight'],
+    [['thermometer','temperature','temp'], 'thermometer'],
+    [['oxygen','o2','mask','non-rebreather','nasal'], 'oxygen_mask'],
+    [['glucometer','glucose meter','bm','blood sugar meter','finger prick'], 'glucometer'],
+  ];
+  function resolveItem(text) {
+    const t = String(text || '').toLowerCase();
+    for (const [words, key] of ITEM_ALIASES) if (words.some(w => t.includes(w))) return key;
+    return null;
+  }
+  const ITEM_LABELS = {
+    plaster: 'an adhesive plaster', gauze: 'a gauze pad', pressure_dressing: 'a pressure dressing',
+    tape: 'a roll of tape', gloves: 'a pair of gloves', syringe: 'a syringe',
+    tourniquet: 'a tourniquet', penlight: 'a penlight', thermometer: 'a thermometer',
+    oxygen_mask: 'an oxygen mask', glucometer: 'a glucometer',
+  };
+
+  // Where a spawned item goes: the trainee's right palm in VR, otherwise a
+  // spot on the overbed table so it is visible in flat mode too.
+  const heldItems = [];
+  function itemAnchor() {
+    const hand = inputs && inputs.find && inputs.find(i => i.connected && i.isHand);
+    if (hand && hand.obj) return { parent: hand.obj, local: new THREE.Vector3(0, 0.02, -0.04) };
+    const ctrl = inputs && inputs.find && inputs.find(i => i.connected);
+    if (ctrl && ctrl.obj) return { parent: ctrl.obj, local: new THREE.Vector3(0, 0.02, -0.10) };
+    return { parent: null, local: new THREE.Vector3(-1.15, 0.90, 0.30) };   // the table
+  }
+
+  function spawnItem(rawText, handOver) {
+    const key = resolveItem(rawText);
+    if (!key) return { ok: false, msg: 'not stocked' };
+    const obj = ITEM_BUILDERS[key]();
+    obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    const a = itemAnchor();
+    if (a.parent) { obj.position.copy(a.local); a.parent.add(obj); }
+    else { obj.position.copy(a.local); scene.add(obj); }
+    // A brief "arrival": scale up from nothing so it reads as being produced.
+    obj.scale.setScalar(0.01);
+    obj.userData.__born = performance.now();
+    obj.userData.__handOver = handOver !== 'no';
+    heldItems.push(obj);
+    SimEngine.logProcedure('item_' + key, 'Asked for and received ' + (ITEM_LABELS[key] || key));
+    return { ok: true, key: key, label: ITEM_LABELS[key] || key, handed: obj.userData.__handOver };
+  }
+
+  // Called each frame: play the arrival animation. Cheap, no allocations.
+  function updateHeldItems(nowMs) {
+    for (let i = 0; i < heldItems.length; i++) {
+      const o = heldItems[i];
+      const t = (nowMs - o.userData.__born) / 320;
+      if (t >= 1) { if (o.scale.x !== 1) o.scale.setScalar(1); continue; }
+      const e = 1 - Math.pow(1 - t, 3);                 // ease-out cubic
+      o.scale.setScalar(0.01 + 0.99 * e);
+      o.rotation.y = (1 - e) * Math.PI * 0.6;
+    }
+  }
+
+
+  // ---------- visible hands (WebXR hand tracking) -----------------------------
+  // Quest exposes 25 tracked joints per hand. Drawing a small sphere at each is
+  // the cheapest hand you can render and, importantly, it makes an EMPTY hand
+  // visible too — which is what sells an item appearing in it.
+  const HAND_JOINTS = [
+    'wrist','thumb-metacarpal','thumb-phalanx-proximal','thumb-phalanx-distal','thumb-tip',
+    'index-finger-metacarpal','index-finger-phalanx-proximal','index-finger-phalanx-intermediate','index-finger-phalanx-distal','index-finger-tip',
+    'middle-finger-metacarpal','middle-finger-phalanx-proximal','middle-finger-phalanx-intermediate','middle-finger-phalanx-distal','middle-finger-tip',
+    'ring-finger-metacarpal','ring-finger-phalanx-proximal','ring-finger-phalanx-intermediate','ring-finger-phalanx-distal','ring-finger-tip',
+    'pinky-finger-metacarpal','pinky-finger-phalanx-proximal','pinky-finger-phalanx-intermediate','pinky-finger-phalanx-distal','pinky-finger-tip',
+  ];
+  const handJointMat = new THREE.MeshStandardMaterial({ color: 0xe8c9a8, roughness: .8 });
+  const handJointGeo = new THREE.SphereGeometry(1, 8, 6);      // scaled per joint
+  function buildHandView(handObj) {
+    const g = new THREE.Group();
+    g.name = 'handview';
+    const spheres = {};
+    HAND_JOINTS.forEach(n => {
+      const s = new THREE.Mesh(handJointGeo, handJointMat);
+      s.visible = false;
+      spheres[n] = s;
+      g.add(s);
+    });
+    handObj.add(g);
+    handObj.userData.__joints = spheres;
+    return g;
+  }
+  // Called each frame while presenting: copy joint poses onto the spheres.
+  function updateHandViews() {
+    for (let i = 0; i < inputs.length; i++) {
+      const inp = inputs[i];
+      const spheres = inp.obj && inp.obj.userData && inp.obj.userData.__joints;
+      if (!spheres) continue;
+      const joints = inp.obj.joints;                 // three populates this for hands
+      if (!joints) continue;
+      for (let k = 0; k < HAND_JOINTS.length; k++) {
+        const name = HAND_JOINTS[k];
+        const j = joints[name];
+        const s = spheres[name];
+        if (!j || !s) continue;
+        if (j.jointRadius) { s.visible = true; s.scale.setScalar(j.jointRadius); }
+        s.position.copy(j.position);
+        s.quaternion.copy(j.quaternion);
+      }
+    }
+  }
+
   // ---------- raycast picking -------------------------------------------------------
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
@@ -3551,7 +3758,15 @@ const VoiceInput = (function () {
     const hand = renderer.xr.getHand(i);
     hand.addEventListener('pinchstart', () => xrActivate(controller));
     scene.add(hand);
+    // Visible hand: joint spheres, plus a record so spawned equipment can be
+    // parented to the palm. `isHand` flips true only once a hand source
+    // actually connects, so controller users are unaffected.
+    buildHandView(hand);
+    const handRec = { obj: hand, connected: false, isHand: true };
+    hand.addEventListener('connected', () => { handRec.connected = true; });
+    hand.addEventListener('disconnected', () => { handRec.connected = false; });
     inputs.push(rec);
+    inputs.push(handRec);
   }
 
   // Reused across frames — no allocation inside the render loop.
@@ -3809,7 +4024,8 @@ const VoiceInput = (function () {
     }
     const state = SimEngine.getState();
     if (state) renderSceneState(state.elapsed);
-    if (presenting) updateHover();
+    if (presenting) { updateHover(); updateHandViews(); }
+    updateHeldItems(timeMs || performance.now());
     renderer.render(scene, camera);
   });
 
