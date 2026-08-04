@@ -794,6 +794,17 @@
     #ivFlash.play { animation: none; }
   }
 
+  /* ---------- pre-hospital setting ----------
+     Same patient illustration, but the ward is stripped out: no monitor, no
+     bed linen, and the ground goes to cold tarmac so the scene matches the
+     briefing instead of contradicting it. */
+  body.prehospital #bed-card {
+    background: linear-gradient(180deg, #14171a 0%, #0a0c0e 60%, #05070a 100%);
+  }
+  body.prehospital #bed-svg-bed, body.prehospital #bed-svg-linen { opacity: 0; }
+  body.prehospital .scene-vignette { opacity: 1; }
+  body.prehospital #scene-wrap { justify-content: center; }
+
   /* ---------- accessibility: focus + reduced motion ---------- */
   .mic-btn:focus-visible, .instructor-panel-actions button:focus-visible,
   .instructor-replay-btn:focus-visible, #try-again:focus-visible,
@@ -1940,6 +1951,176 @@ const SimEngine = (function () {
         ],
       },
     },
+    // ---------------------------------------------------------------------
+    // PRE-HOSPITAL. The teaching point inverts: nothing here is subtle, so
+    // this case does not test noticing — it tests ORDER and SPEED under
+    // pressure. Catastrophic haemorrhage is controlled before anything else
+    // (the M in MARCH), and the scene is checked before you are in it.
+    // `setting: 'prehospital'` strips the monitor and the fluids: vitals must
+    // be obtained with your hands, qualitatively, one at a time.
+    // ---------------------------------------------------------------------
+    roadside: {
+      title: 'Nobody Else Is Coming',
+      subtitle: 'A rural roadside, a cyclist down, and arterial bleeding. No kit, no monitor.',
+      difficulty: 'Pre-hospital',
+      draft: true,
+      setting: 'prehospital',
+      patient: { name: 'Ellis', age: 31 },
+      durationSec: 270,
+      mode: 'deteriorating',
+      escalateLabel: 'Call 911 / EMS',
+      hideActions: ['vitals', 'fluids'],
+      briefing: {
+        setting: 'A single-track road, early evening. You were driving home.',
+        handover: [
+          'A cyclist is on the tarmac beside a stopped car. The driver is standing over them, shouting for help.',
+          'You are the only person here with any clinical training. There is no ambulance en route yet.',
+          'You have no kit. Your car has a first-aid tin somewhere; the driver is wearing a belt.',
+          'The nearest hospital is 25 minutes away by road.',
+        ],
+        obs: 'No monitor. No numbers. Whatever you want to know, you will have to go and get.',
+        role: 'You are it, until the ambulance arrives.',
+      },
+      // Bleeding out is fast: pressure falls hard once compensation fails.
+      vitals: {
+        rr:  [{t:0,v:24},{t:120,v:30},{t:210,v:36},{t:270,v:40}],
+        hr:  [{t:0,v:112},{t:120,v:136},{t:210,v:152},{t:270,v:160}],
+        sbp: [{t:0,v:106},{t:120,v:88},{t:210,v:66},{t:270,v:50}],
+        dbp: [{t:0,v:66},{t:120,v:52},{t:210,v:38},{t:270,v:28}],
+      },
+      wobble: null,
+      phases: [
+        { until: 90,  key: 'baseline' },
+        { until: 180, key: 'early' },
+        { until: 270, key: 'late' },
+        { until: Infinity, key: 'crash' },
+      ],
+      cues: [
+        { key: 'bleed',      t: 4,   label: 'Bright red bleeding, pumping from the left thigh', channel: 'patient' },
+        { key: 'pale',       t: 45,  label: 'Going pale and sweaty', channel: 'skin' },
+        { key: 'agitation',  t: 90,  label: 'Agitated, repeating themselves — early shock', channel: 'patient' },
+        { key: 'thready',    t: 150, label: 'Radial pulse thready and hard to find', channel: 'pulse' },
+        { key: 'drowsy',     t: 200, label: 'Going quiet and drowsy', channel: 'patient' },
+        { key: 'crash',      t: 270, label: 'CARDIAC ARREST from blood loss', channel: 'patient' },
+      ],
+      keyCue: 'bleed',
+      dialogue: {
+        baseline: ["My leg — I can't feel my leg properly.", "Am I bleeding? How bad is it?", "Don't let go, please don't let go."],
+        early:    ["I'm really cold.", "I feel sick... everything's spinning.", "(breathing fast) ...am I going to be alright?"],
+        late:     ["...I'm so tired.", "(mumbling) ...can't...", "..."],
+        crash:    ["(no response, no breathing)"]
+      },
+      skinText: {
+        baseline: "Warm above the wound, blood-soaked below. Bright red, still flowing fast.",
+        early:    "Pale, clammy, cool to touch. Lips going grey. Bleeding continues.",
+        late:     "Cold, grey, mottled at the knees. Skin like wax.",
+        crash:    "Cold and grey. No response to touch."
+      },
+      responseDelayMs: { baseline: 0, early: 900, late: 2600, crash: 3800 },
+      extraActions: [
+        { id: 'scene', label: 'Check the Scene', track: 'attention', tag: 'Scene:', icon: 'strip',
+          readings: {
+            baseline: 'Traffic still moving past. The driver has not put hazards on. Broken glass by the kerb. Do this FIRST next time — before you kneel down.',
+            early:    'Traffic still moving past. You are exposed here.',
+            late:     'Traffic still moving past. You are exposed here.',
+            crash:    'Traffic still moving past.',
+          } },
+        { id: 'pulse', label: 'Feel a Pulse', track: 'attention', tag: 'Pulse:', icon: 'strip',
+          readings: {
+            baseline: 'Radial pulse present, fast — you count roughly 110.',
+            early:    'Fast and thready. Hard to count. Maybe 130-140.',
+            late:     'No radial pulse. Carotid only, very fast and weak.',
+            crash:    'No pulse.',
+          } },
+        { id: 'breathing', label: 'Count Breathing', track: 'attention', tag: 'Breathing:', icon: 'strip',
+          readings: {
+            baseline: 'Fast — about 24, and they can still speak full sentences.',
+            early:    'Fast and shallow, around 30. Speaking in short phrases now.',
+            late:     'Rapid and shallow, hard to count. Single words only.',
+            crash:    'Not breathing.',
+          } },
+        { id: 'refill', label: 'Capillary Refill', track: 'attention', tag: 'Cap refill:', icon: 'strip',
+          readings: {
+            baseline: 'Just over 2 seconds. Fingers cool.',
+            early:    '3 to 4 seconds. Hands cold and damp.',
+            late:     'No refill. Fingertips mottled and cold.',
+            crash:    'No refill.',
+          } },
+        { id: 'pressure', label: 'Direct Pressure', track: 'action', tag: 'Action:', icon: 'drop',
+          readings: {
+            baseline: 'Both hands, hard, straight onto the wound. Flow slows but does not stop — it is arterial.',
+            early:    'Pressure on. Flow slows. Your hands are already soaked.',
+            late:     'Pressure on, but there is little left to lose.',
+            crash:    'Pressure on.',
+          } },
+        { id: 'tourniquet', label: 'Improvise a Tourniquet', track: 'action', tag: 'Action:', icon: 'drop',
+          readings: {
+            baseline: "The driver's belt, high and tight above the wound, twisted until the flow stops. It stops.",
+            early:    'Belt on, high and tight, twisted down. The bleeding stops.',
+            late:     'Belt on and tightened. The bleeding stops, very late.',
+            crash:    'Belt applied.',
+          } },
+        { id: 'delegate', label: 'Direct the Bystander', track: 'action', tag: 'You say:', icon: 'strip',
+          readings: {
+            baseline: '"Call 911. Tell them: cyclist hit by a car, bleeding badly from the leg, conscious. Then put your hazards on." He starts dialling.',
+            early:    '"Call 911 now — say serious bleeding, going into shock." He starts dialling.',
+            late:     '"Call 911, tell them we are losing him." He is already dialling.',
+            crash:    '"Tell them we are doing CPR."',
+          } },
+      ],
+      // Haemorrhage control is the clock. A tourniquet is definitive; pressure
+      // alone only slows an arterial bleed, which is the whole lesson.
+      responses: {
+        pressure:   { onsetSec: 4,  peakSec: 25, decaySec: 200,
+                      effect: { sbp: 9, dbp: 5, hr: -8 } },
+        tourniquet: { onsetSec: 6,  peakSec: 22, decaySec: 0, definitive: true,
+                      effect: { sbp: 16, dbp: 9, hr: -18 } },
+        escalate:   { onsetSec: 150, peakSec: 220, decaySec: 0, definitive: true,
+                      effect: { sbp: 10, dbp: 6, hr: -10 } },
+        delegate:   { onsetSec: 120, peakSec: 190, decaySec: 0, definitive: true,
+                      effect: { sbp: 10, dbp: 6, hr: -10 } },
+      },
+      rightPlay: { escalateBefore: 60 },
+      scene: {
+        restless: [20, 150],
+        phaseVisuals: {
+          baseline: { eyes: 'open',   tone: null,         mottle: false, pallor: false },
+          early:    { eyes: 'open',   tone: 'pale-cool',  mottle: false, pallor: true  },
+          late:     { eyes: 'drowsy', tone: 'pale-cool',  mottle: true,  pallor: true  },
+          crash:    { eyes: 'closed', tone: 'grey',       mottle: true,  pallor: true  },
+        },
+      },
+      scoring: {
+        ttrLabel: 'Time to Haemorrhage Control',
+        ttrSub: 'Time from arrival to your first attempt at stopping the bleeding',
+        latencyLabel: 'Cue Latency (the bleeding)',
+        latencySub: 'How long the bleeding was in front of you before you acted on it',
+      },
+      coaching: {
+        endedBeforeCues: "This run ended at {endTime}, before anything had developed.",
+        premature: "You called for help before you had looked at the patient. On a roadside that is not the worst instinct — but the ambulance is 20 minutes out, and what happens in the next 60 seconds is entirely down to you.",
+        prematureBanner: "Called at {endTime} — before assessing.",
+        neverLooked: "The bleeding was visible from the moment you arrived at {cueTime} — bright red and pumping. You never addressed it. Nothing else you do matters while that continues: this is the M in MARCH, and it comes before airway, before breathing, before everything.",
+        looked: "The bleeding was visible from the moment you arrived at {cueTime}. You first acted on it at {lookedAt} — {latency} of arterial bleeding you could have been compressing. On a femoral bleed that is measured in units of blood.",
+        sawTemplate: "",
+        sawMetric: null,
+        banners: {
+          escalated_early: "Help called at {endTime} — early, while you still had control of the bleeding.",
+          escalated_late: "Help called at {endTime} — later than a bleed like this allows.",
+          crash: "Ellis arrested at {endTime} from blood loss.",
+        },
+        outcomes: {
+          escalated_early: "That is the shape of it: control the bleeding, get help coming, and hold the line until it arrives. Note what you did NOT need — a monitor, a cannula, a hospital. Hands and a belt.",
+          escalated_late: "You got help coming at {endTime}. With an arterial bleed the window is smaller than it feels: every minute of uncontrolled flow is circulating volume you cannot get back, and the ambulance was always going to be 20 minutes.",
+          crash: "Ellis bled to death on the road. The bleeding was visible at {t:bleed} — the very first thing, before any other sign. Direct pressure needs no equipment and no permission, and a belt above the wound stops a femoral bleed. This is the one emergency where the right first move is almost always physical and immediate.",
+        },
+        actionNotes: [
+          { key: 'tourniquet', skipOutcomes: [], text: "The tourniquet is what actually stopped it — pressure alone slows an arterial bleed but rarely holds it." },
+          { key: 'delegate', skipOutcomes: [], text: "Sending the bystander to make the call was the right instinct: it got help moving without you taking your hands off the wound." },
+          { key: 'scene', skipOutcomes: [], text: "You checked the scene. Traffic was still moving — on a live carriageway that check is what stops you becoming the second patient." },
+        ],
+      },
+    },
   };
 
   // ---- Seeded run variation ------------------------------------------------
@@ -1978,6 +2159,9 @@ const SimEngine = (function () {
     const st = (t) => (t === Infinity ? Infinity : Math.round(t * f * 10) / 10);
     const inst = {
       key, runId, stretch: f, runMode: challenge ? 'challenge' : 'standard',
+      setting: src.setting || 'hospital',
+      hideActions: src.hideActions || [],
+      escalateLabel: src.escalateLabel || null,
       title: src.title, subtitle: src.subtitle, difficulty: src.difficulty, draft: !!src.draft,
       patient: src.patient, mode: src.mode,
       durationSec: st(src.durationSec),
@@ -3454,6 +3638,23 @@ const VoiceInput = (function () {
     const escLabel = SimEngine.getScenario().escalateLabel || 'Escalate / Call for Help';
     const escText = esc.querySelector('.esc-label');
     if (escText) escText.textContent = escLabel;
+
+    // Pre-hospital settings have no monitor and no infusion: vitals must be
+    // obtained by hand (the scenario's own assessment actions) and the ward
+    // furniture is hidden so the scene does not contradict the briefing.
+    const sc = SimEngine.getScenario();
+    const prehospital = sc.setting === 'prehospital';
+    const hide = sc.hideActions || [];
+    const setHidden = (id, on) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('hidden', !!on);
+    };
+    setHidden('btn-vitals', hide.indexOf('vitals') >= 0);
+    setHidden('btn-fluids', hide.indexOf('fluids') >= 0);
+    setHidden('monitor-card', prehospital);
+    document.body.classList.toggle('prehospital', prehospital);
+    // Ward-only scenery inside the patient illustration.
+    ['ivBag', 'ivDrip', 'pillow'].forEach(id => setHidden(id, prehospital));
     SimEngine.getScenario().extraActions.forEach(ex => {
       const b = document.createElement('button');
       b.type = 'button';
