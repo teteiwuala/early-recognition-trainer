@@ -623,6 +623,61 @@
   body.preview-on #btn-preview { border-color: var(--cat-attention); color: var(--cat-attention); }
   #btn-preview[aria-pressed="true"]::after { content: " · on"; opacity: .7; }
 
+  /* ---------- 3D case picker + briefing ---------- */
+  #pick3d, #brief3d {
+    position: fixed; inset: 0; z-index: 40; overflow-y: auto;
+    background: radial-gradient(120% 90% at 50% 0%, #16232a 0%, #0b1214 55%, #05080a 100%);
+    display: flex; align-items: flex-start; justify-content: center; padding: 5vh 5vw;
+  }
+  .p3-inner { width: 100%; max-width: 720px; }
+  .p3-title { font-size: 22px; font-weight: 800; letter-spacing: -.01em; color: #eef4f3; }
+  .p3-title span {
+    font-size: 11px; font-weight: 700; letter-spacing: .12em; vertical-align: middle;
+    border: 1px solid rgba(127,211,200,.5); color: #7fd3c8; border-radius: 999px; padding: 2px 8px; margin-left: 8px;
+  }
+  .p3-sub { color: #93a4a3; font-size: 13.5px; margin: 4px 0 22px; }
+  .p3-card {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    background: #131c1e; border: 1px solid #263436; border-left: 3px solid #7fd3c8;
+    border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; color: #e6edf3; font: inherit;
+  }
+  .p3-card:hover { background: #182325; }
+  .p3-card:focus-visible { outline: 2px solid #7fd3c8; outline-offset: 2px; }
+  .p3-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  .p3-diff {
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em;
+    color: #7fd3c8; border: 1px solid rgba(127,211,200,.4); border-radius: 999px; padding: 2px 8px;
+  }
+  .p3-draft {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #e2b45c; border: 1px solid rgba(226,180,92,.4); border-radius: 999px; padding: 2px 8px;
+  }
+  .p3-name { font-size: 17px; font-weight: 700; }
+  .p3-desc { font-size: 13.5px; color: #93a4a3; margin-top: 3px; }
+  .p3-meta { font-size: 12px; color: #6f8280; margin-top: 6px; font-family: var(--font-mono, monospace); }
+  .p3-foot { font-size: 12px; color: #6f8280; text-align: center; margin-top: 14px; }
+  .b3-eyebrow {
+    font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .14em;
+    color: #7fd3c8; margin-bottom: 8px;
+  }
+  #brief3d h2 { margin: 0 0 4px; font-size: 21px; color: #eef4f3; }
+  .b3-setting { color: #93a4a3; font-size: 13px; margin-bottom: 16px; }
+  .b3-list { margin: 0 0 16px; padding-left: 18px; color: #dbe6e5; }
+  .b3-list li { font-size: 14.5px; line-height: 1.55; margin-bottom: 6px; }
+  .b3-obs {
+    font-family: var(--font-mono, monospace); font-size: 12.5px; color: #b9c8c6;
+    background: #101a1b; border: 1px solid #263436; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;
+  }
+  .b3-role { font-size: 14px; color: #dbe6e5; margin-bottom: 18px; }
+  .b3-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+  .b3-actions button {
+    font: inherit; font-size: 14px; font-weight: 700; padding: 12px 20px; border-radius: 11px; cursor: pointer;
+    border: 1px solid #2a3a3b; background: #182223; color: #e6edf3;
+  }
+  #b3-begin { background: #12a594; border-color: #12a594; color: #041413; }
+  #b3-begin:hover { background: #16c0ac; }
+  .b3-actions button:focus-visible { outline: 2px solid #7fd3c8; outline-offset: 2px; }
+
   /* ---------- accessibility: focus + reduced motion ---------- */
   .mic-btn:focus-visible, .instructor-panel-actions button:focus-visible,
   .instructor-replay-btn:focus-visible, #try-again:focus-visible,
@@ -692,6 +747,42 @@
 <!-- =========================================================
      HUD: 2D chrome floating over the 3D room
      ========================================================= -->
+
+<!-- =========================================================
+     CASE PICKER + BRIEFING (flat overlays)
+     ---------------------------------------------------------
+     The engine has always had five cases; this build had no way
+     to reach them and booted straight into sepsis. These sit
+     over the canvas before the clock starts. In a headset the
+     trainee picks here first, then presses Enter VR — a proper
+     in-world lobby is the next step, not a blocker for choosing.
+     ========================================================= -->
+<div id="pick3d">
+  <div class="p3-inner">
+    <div class="p3-head">
+      <div class="p3-title">Early Recognition Trainer <span>3D</span></div>
+      <div class="p3-sub">Pick a case. Nothing in the room will alert you — noticing is the skill.</div>
+    </div>
+    <div id="p3-list"></div>
+    <div class="p3-foot">Timing varies slightly on every run, so watch the patient rather than the clock.</div>
+  </div>
+</div>
+
+<div id="brief3d" class="hidden">
+  <div class="p3-inner">
+    <div class="b3-eyebrow">Handover · before you go in</div>
+    <h2 id="b3-title">—</h2>
+    <div class="b3-setting" id="b3-setting"></div>
+    <ul class="b3-list" id="b3-list"></ul>
+    <div class="b3-obs" id="b3-obs"></div>
+    <div class="b3-role" id="b3-role"></div>
+    <div class="b3-actions">
+      <button type="button" id="b3-back">Back to cases</button>
+      <button type="button" id="b3-begin">Begin assessment</button>
+    </div>
+  </div>
+</div>
+
 <div id="hud">
     <div id="topbar">
       <div class="brand">
@@ -4432,12 +4523,120 @@ const VoiceInput = (function () {
   }
 
   window.__mark('module 3 defined');
+
+
+  // Scenario-declared extra actions become HUD buttons. Pre-hospital cases use
+  // these for hands-on assessment (feel a pulse, count breathing) since there
+  // is no monitor to read.
+  function renderExtraActions3d(sc) {
+    document.querySelectorAll('#controls .extra3d').forEach(el => el.remove());
+    const esc = document.getElementById('btn-escalate');
+    if (!esc || !sc.extraActions) return;
+    sc.extraActions.forEach(ex => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'action-btn extra3d' + (ex.track === 'action' ? ' fluids' : '');
+      b.textContent = ex.label;
+      b.addEventListener('click', () => {
+        const r = SimEngine.performExtra(ex.id);
+        if (r) setFeedback(r.tag, r.text);
+      });
+      esc.parentNode.insertBefore(b, esc);
+    });
+  }
+
+  // ---------- case picker + briefing (flat overlays) --------------------------
+  // The engine is scenario-driven; this is simply the way in. Selecting a case
+  // sets currentScenarioKey, which startScenario() already honours.
+  const pick3d = document.getElementById('pick3d');
+  const brief3d = document.getElementById('brief3d');
+  let pendingKey = null;
+
+  function buildPicker3d() {
+    const list = document.getElementById('p3-list');
+    list.innerHTML = '';
+    SimEngine.listScenarios().forEach(s => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'p3-card';
+      const top = document.createElement('div');
+      top.className = 'p3-top';
+      const d = document.createElement('span'); d.className = 'p3-diff'; d.textContent = s.difficulty;
+      top.appendChild(d);
+      if (s.draft) {
+        const dr = document.createElement('span'); dr.className = 'p3-draft';
+        dr.textContent = 'Draft — pending clinical review'; top.appendChild(dr);
+      }
+      const nm = document.createElement('div'); nm.className = 'p3-name'; nm.textContent = s.title;
+      const ds = document.createElement('div'); ds.className = 'p3-desc'; ds.textContent = s.subtitle;
+      const mt = document.createElement('div'); mt.className = 'p3-meta';
+      mt.textContent = s.patient.name + ', ' + s.patient.age + '  ·  ~' + s.minutes + ' min';
+      b.appendChild(top); b.appendChild(nm); b.appendChild(ds); b.appendChild(mt);
+      b.addEventListener('click', () => showBriefing3d(s.key));
+      list.appendChild(b);
+    });
+  }
+
+  function showBriefing3d(key) {
+    pendingKey = key;
+    const s = SimEngine.listScenarios().find(x => x.key === key);
+    const br = SimEngine.getBriefing(key) || {};
+    document.getElementById('b3-title').textContent = s.title + ' — ' + s.patient.name + ', ' + s.patient.age;
+    document.getElementById('b3-setting').textContent = br.setting || '';
+    const ul = document.getElementById('b3-list');
+    ul.innerHTML = '';
+    (br.handover || []).forEach(line => {
+      const li = document.createElement('li');
+      li.textContent = line;                 // textContent: briefing text is never HTML
+      ul.appendChild(li);
+    });
+    document.getElementById('b3-obs').textContent = br.obs || '';
+    document.getElementById('b3-role').textContent = br.role || '';
+    pick3d.classList.add('hidden');
+    brief3d.classList.remove('hidden');
+    document.getElementById('b3-begin').focus();
+  }
+
+  function showPicker3d() {
+    clearInterval(tickTimer);      // this build has no stopClock(); the 2D one does
+    brief3d.classList.add('hidden');
+    debriefScreen.classList.add('hidden');
+    instructorOverlay.classList.add('hidden');
+    hud.classList.add('hidden');
+    buildPicker3d();
+    pick3d.classList.remove('hidden');
+  }
+
+  document.getElementById('b3-back').addEventListener('click', showPicker3d);
+  document.getElementById('b3-begin').addEventListener('click', () => {
+    currentScenarioKey = pendingKey || currentScenarioKey;
+    pick3d.classList.add('hidden');
+    brief3d.classList.add('hidden');
+    startScenario();
+  });
+
   function startScenario() {
     // The new engine is scenario-driven: reset(scenarioKey, runMode).
     // currentScenarioKey lets the VR lobby choose a case later; until the
     // lobby lands this stays on the flagship sepsis case.
     SimEngine.reset(currentScenarioKey, 'standard');
+    pick3d.classList.add('hidden');
+    brief3d.classList.add('hidden');
     debriefScreen.classList.add('hidden');
+    // Pre-hospital cases have no monitor and no infusion: hide the ward-only
+    // affordances so the scene does not contradict the briefing.
+    (function () {
+      const sc = SimEngine.getScenario();
+      const hide = sc.hideActions || [];
+      const t = (id, on) => { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !!on); };
+      t('btn-vitals', hide.indexOf('vitals') >= 0);
+      t('btn-fluids', hide.indexOf('fluids') >= 0);
+      if (typeof monScreen !== 'undefined' && monScreen) monScreen.visible = sc.setting !== 'prehospital';
+      const escText = document.querySelector('#btn-escalate .esc-label') ||
+                      document.getElementById('btn-escalate');
+      if (escText && sc.escalateLabel) escText.textContent = sc.escalateLabel;
+      renderExtraActions3d(sc);
+    })();
     instructorOverlay.classList.add('hidden');
     hideModal();
     pendingDebrief = false;
@@ -4459,7 +4658,9 @@ const VoiceInput = (function () {
 }
 
   window.__mark('calling startScenario');
-  startScenario();
+  // Boot to the picker, not mid-case — the trainee chooses, then reads the
+  // handover, then the clock starts.
+  showPicker3d();
   window.__mark('ready');
 })();
 </script>
