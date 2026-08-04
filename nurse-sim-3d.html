@@ -3521,7 +3521,9 @@ const VoiceInput = (function () {
 
     async function start() {
       if (state !== 'off' && state !== 'error') return;
-      if (!navigator.onLine) { fail('No internet connection, so the instructor cannot hear you.'); return; }
+      // navigator.onLine is NOT a hard gate: on Linux it often reports offline
+      // while requests succeed (VM NICs, NetworkManager quirks). Attempt the
+      // connection regardless — the socket's own error path reports honestly.
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         fail('This browser will not give the page a microphone.'); return;
       }
