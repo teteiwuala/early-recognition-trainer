@@ -3532,10 +3532,24 @@ const VoiceInput = (function () {
   // frame loop automatically when a session is active (72/90Hz on Quest) and
   // to rAF otherwise. The sim clock stays on its own setInterval below, so
   // frame rate and XR transitions can never distort scenario timing.
-  renderer.setAnimationLoop(() => {
+  // Frame budget. Without a GPU the browser software-renders this scene, which
+  // pins a CPU core and heats the machine. In VR we must never throttle (72Hz+
+  // or it feels sick), but a flat desktop view is fine at 30fps, and a hidden
+  // tab needs no frames at all — the sim clock is a separate setInterval, so
+  // skipping frames cannot affect scenario timing.
+  const FLAT_FPS = 30;
+  let lastFrame = 0;
+  renderer.setAnimationLoop((timeMs) => {
+    const presenting = renderer.xr.isPresenting;
+    if (!presenting) {
+      if (document.hidden) return;                       // tab in the background
+      const t = timeMs || performance.now();
+      if (t - lastFrame < 1000 / FLAT_FPS) return;       // cap flat-mode frame rate
+      lastFrame = t;
+    }
     const state = SimEngine.getState();
     if (state) renderSceneState(state.elapsed);
-    if (renderer.xr.isPresenting) updateHover();
+    if (presenting) updateHover();
     renderer.render(scene, camera);
   });
 
