@@ -948,7 +948,6 @@ const SimEngine = (function () {
      {crashTime} {saw} {value}, plus {t:cueKey} for any cue's (jittered)
      time. Cue `channel` names the attention event that counts as "looking
      at" it: monitor | skin | patient | an extraAction id.               */
-  window.__mark('engine loaded');
   const SCENARIOS = {
 
     sepsis: {
@@ -1018,6 +1017,15 @@ const SimEngine = (function () {
           late:     { eyes: 'drowsy', tone: 'pale-cool',   mottle: true,  pallor: true },
           crash:    { eyes: 'closed', tone: 'grey',        mottle: true,  pallor: true },
         },
+      },
+      // How this patient answers treatment. A bolus in sepsis lifts the pressure
+      // and then lets it sag — the classic transient response that means "still
+      // losing ground, keep going", NOT "fixed". Only help arriving is definitive.
+      responses: {
+        fluids:   { onsetSec: 18, peakSec: 65, decaySec: 130,
+                    effect: { sbp: 16, dbp: 9, hr: -10 } },
+        escalate: { onsetSec: 40, peakSec: 90, decaySec: 0, definitive: true,
+                    effect: { sbp: 10, dbp: 6, hr: -8, rr: -3 } },
       },
       scoring: {
         ttrLabel: 'Time to Recognition',
@@ -1133,6 +1141,17 @@ const SimEngine = (function () {
           crash:    { eyes: 'closed', tone: 'grey',      mottle: false, pallor: true },
         },
       },
+      // Sugar is definitive here: correct the glucose and the picture reverses.
+      // Fluids do almost nothing, which is the point — the right intervention
+      // matters more than doing something.
+      responses: {
+        sugar:    { onsetSec: 20, peakSec: 55, decaySec: 0, definitive: true,
+                    effect: { hr: -14, sbp: 6 } },
+        fluids:   { onsetSec: 20, peakSec: 60, decaySec: 90,
+                    effect: { hr: -3 } },
+        escalate: { onsetSec: 45, peakSec: 95, decaySec: 0, definitive: true,
+                    effect: { hr: -8 } },
+      },
       scoring: {
         ttrLabel: 'Time to Treatment',
         ttrSub: 'Time from case start to your first corrective action (sugar, fluids, or escalation)',
@@ -1221,6 +1240,11 @@ const SimEngine = (function () {
           early:    { eyes: 'open', tone: null, mottle: false, pallor: false },
           late:     { eyes: 'open', tone: null, mottle: false, pallor: false },
         },
+      },
+      // Nothing to treat. Fluids in a well patient buy a slightly fuller
+      // circulation and nothing else — deliberately unrewarding.
+      responses: {
+        fluids: { onsetSec: 25, peakSec: 70, decaySec: 120, effect: { sbp: 4 } },
       },
       scoring: {
         ttrLabel: 'First Intervention',
@@ -1348,6 +1372,17 @@ const SimEngine = (function () {
           crash:    { eyes: 'closed', tone: 'grey',       mottle: true,  pallor: true },
         },
       },
+      // Rehydration works and works well in DKA — but it is holding, not fixing.
+      // The definitive answer is insulin and monitoring that only exist at the
+      // other end of a three-hour flight, so activating transport is what
+      // actually changes the trajectory. Note the long onset: help is far away.
+      responses: {
+        fluids:   { onsetSec: 20, peakSec: 80, decaySec: 165,
+                    effect: { hr: -16, sbp: 12, dbp: 7 } },
+        escalate: { onsetSec: 120, peakSec: 200, decaySec: 0, definitive: true,
+                    effect: { hr: -10, sbp: 8, rr: -4 } },
+        glucose:  { onsetSec: 0, peakSec: 1, decaySec: 0, effect: {} },
+      },
       scoring: {
         ttrLabel: 'Time to Medevac Activation',
         ttrSub: 'Time from case start to your first decisive action (fluids or activating transport)',
@@ -1430,7 +1465,21 @@ const SimEngine = (function () {
       rightPlay: { ...src.rightPlay },
       scene: { restless: src.scene.restless ? src.scene.restless.map(st) : null, phaseVisuals: src.scene.phaseVisuals },
       scoring: src.scoring, coaching: src.coaching,
+      // Treatment responses. Their timings are stretched with the run like
+      // everything else, so a slower-moving run does not make fluids look
+      // relatively more effective than the case intends.
+      responses: null,
     };
+    if (src.responses) {
+      inst.responses = {};
+      for (const rk in src.responses) {
+        const r = src.responses[rk];
+        inst.responses[rk] = {
+          onsetSec: st(r.onsetSec), peakSec: st(r.peakSec), decaySec: st(r.decaySec || 0),
+          definitive: !!r.definitive, effect: { ...(r.effect || {}) },
+        };
+      }
+    }
     if (inst.rightPlay.escalateBefore != null) inst.rightPlay.escalateBefore = st(inst.rightPlay.escalateBefore);
     for (const k in src.vitals) inst.vitals[k] = src.vitals[k].map(p => ({ t: st(p.t), v: p.v }));
     return inst;
@@ -1448,13 +1497,128 @@ const SimEngine = (function () {
     return frames[frames.length - 1].v;
   }
 
-  function getVitals(t) {
+  /* ---- RESPONSIVE PHYSIOLOGY ------------------------------------------------
+     The keyframes above describe the UNTREATED trajectory — what happens if
+     nobody does anything. Interventions then bend that curve, which is the
+     whole point: emergency practice is acting and reading the response, and a
+     patient who ignores you cannot teach it.
+
+     Each response has a shape rather than a flat bonus:
+       onsetSec   nothing happens instantly; drugs and fluid take effect
+       peakSec    maximum benefit
+       decaySec   how long the benefit lasts before it fades
+     A NON-definitive intervention (a fluid bolus in sepsis) lifts the numbers
+     and then lets them sag again, because the cause is still running. That
+     "it worked, then it stopped working" signal is exactly the read we want
+     trainees to learn: transient response means keep going, not job done.
+     A `definitive: true` response (help arriving, sugar in hypoglycaemia)
+     arrests the decline instead of merely masking it.
+
+     History is RECORDED, not recomputed. Once vitals depend on what the
+     trainee did and when, recomputing a past value from the present state
+     would produce numbers they never saw — and the debrief's whole credibility
+     rests on showing only what was actually on screen.
+     ------------------------------------------------------------------------- */
+
+  // Bell-ish response envelope: 0 before onset, 1 at peak, easing back toward
+  // `floor` over decaySec (floor = 1 for definitive care, which does not fade).
+  function responseEnvelope(dt, r) {
+    if (dt <= r.onsetSec) return 0;
+    const rise = Math.min(1, (dt - r.onsetSec) / Math.max(1, r.peakSec - r.onsetSec));
+    if (dt <= r.peakSec) return rise;
+    if (r.definitive) return 1;
+    const over = (dt - r.peakSec) / Math.max(1, r.decaySec);
+    return Math.max(0, 1 - over);          // linear fade back to untreated
+  }
+
+  // Untreated baseline at time t.
+  function baselineVitals(t) {
     const sc = state.scenario;
     const out = {};
     for (const k in sc.vitals) out[k] = interpKeyframes(sc.vitals[k], t);
     if (sc.wobble && t < sc.wobble.untilT) out[sc.wobble.vital] += Math.sin(t / sc.wobble.period) * sc.wobble.amp;
-    for (const k in out) out[k] = Math.round(out[k]);
     return out;
+  }
+
+  // Physiological clamps so no combination of effects produces nonsense.
+  const VITAL_BOUNDS = { rr: [6, 46], hr: [35, 180], sbp: [45, 190], dbp: [25, 120] };
+
+  function computeVitals(t) {
+    const sc = state.scenario;
+    const out = baselineVitals(t);
+    const responses = sc.responses || {};
+
+    // Definitive care freezes the underlying decline at the moment it landed,
+    // so the patient stops getting worse instead of merely looking better.
+    let freezeAt = null;
+    for (const iv of state.interventions) {
+      const r = responses[iv.key];
+      if (r && r.definitive && t >= iv.t + r.onsetSec) {
+        const at = iv.t + r.onsetSec;
+        if (freezeAt === null || at < freezeAt) freezeAt = at;
+      }
+    }
+    if (freezeAt !== null) {
+      const frozen = baselineVitals(freezeAt);
+      for (const k in out) out[k] = frozen[k];
+    }
+
+    for (const iv of state.interventions) {
+      const r = responses[iv.key];
+      if (!r || !r.effect) continue;
+      const w = responseEnvelope(t - iv.t, r);
+      if (w <= 0) continue;
+      for (const k in r.effect) if (k in out) out[k] += r.effect[k] * w;
+    }
+
+    for (const k in out) {
+      const b = VITAL_BOUNDS[k];
+      let v = out[k];
+      if (b) v = Math.max(b[0], Math.min(b[1], v));
+      out[k] = Math.round(v);
+    }
+    return out;
+  }
+
+  // Live value for the current moment (scene rendering, monitor reads).
+  function getVitals(t) { return computeVitals(t); }
+
+  // Sampled trajectory, appended once per tick. The debrief reads THIS.
+  function recordVitals(t) {
+    const h = state.vitalsHistory;
+    // Append only for strictly-later times. Real elapsed time never goes
+    // backwards, but a resumed pause or a test harness can, and appending an
+    // out-of-order sample would corrupt the binary search in vitalsAtRecorded.
+    if (h.length && t <= h[h.length - 1].t + 0.4) return;   // ~2-3 samples/sec is plenty
+    const v = computeVitals(t);
+    h.push({ t: t, rr: v.rr, hr: v.hr, sbp: v.sbp, dbp: v.dbp });
+  }
+
+  // Historical lookup: what was actually on the monitor at time t. Interpolates
+  // between recorded samples so scene rendering stays smooth between ticks, and
+  // falls back to computing only for times never simulated.
+  function vitalsAtRecorded(t) {
+    const h = state.vitalsHistory;
+    if (!h || !h.length) return computeVitals(t);
+    if (t <= h[0].t) return { rr: h[0].rr, hr: h[0].hr, sbp: h[0].sbp, dbp: h[0].dbp };
+    const last = h[h.length - 1];
+    if (t >= last.t) return { rr: last.rr, hr: last.hr, sbp: last.sbp, dbp: last.dbp };
+    let lo = 0, hi = h.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (h[mid].t <= t) lo = mid; else hi = mid; }
+    const a = h[lo], b = h[hi];
+    const f = (t - a.t) / Math.max(1e-6, b.t - a.t);
+    return {
+      rr: Math.round(a.rr + (b.rr - a.rr) * f),
+      hr: Math.round(a.hr + (b.hr - a.hr) * f),
+      sbp: Math.round(a.sbp + (b.sbp - a.sbp) * f),
+      dbp: Math.round(a.dbp + (b.dbp - a.dbp) * f),
+    };
+  }
+
+  // Registered by every intervention so the curve can respond to it.
+  function addIntervention(key) {
+    if (!state || !state.running) return;
+    state.interventions.push({ key: key, t: state.elapsed });
   }
 
   function getPhase(t) {
@@ -1475,6 +1639,8 @@ const SimEngine = (function () {
       log: [],          // the full event log — the single source of truth for the debrief
       firedCues: new Set(),
       firedReasoning: new Set(),
+      interventions: [],        // {key, t} — what was done and when
+      vitalsHistory: [],        // recorded trajectory; the debrief's source of truth
       running: true,
       paused: false,       // true while a Instructor reflection panel is open
       pauseStartedAt: null,
@@ -1519,6 +1685,8 @@ const SimEngine = (function () {
   function tick() {
     if (!state.running || state.paused) return { crashed: false, timeUp: false, reasoningDue: null };
     state.elapsed = (Date.now() - state.startedAt) / 1000;
+    recordVitals(state.elapsed);          // sample BEFORE cues fire, so the
+                                          // recorded curve covers every moment
 
     state.scenario.cues.forEach(cue => {
       if (state.elapsed >= cue.t && !state.firedCues.has(cue.key)) {
@@ -1576,6 +1744,7 @@ const SimEngine = (function () {
   }
 
   function giveFluids() {
+    addIntervention('fluids');
     logEvent('action', 'fluids', 'Gave fluids');
   }
 
@@ -1588,6 +1757,7 @@ const SimEngine = (function () {
   // Scenario-declared extra actions (e.g. a point-of-care glucose test).
   // Attention-track extras record what was seen, mirroring checkVitals.
   function performExtra(id) {
+    addIntervention(id);
     const ex = state.scenario.extraActions.find(a => a.id === id);
     if (!ex) return null;
     const phase = getPhase(state.elapsed);
@@ -1598,6 +1768,7 @@ const SimEngine = (function () {
   }
 
   function escalate() {
+    addIntervention('escalate');
     let outcome;
     if (state.scenario.mode === 'stable') {
       outcome = 'overescalated';
@@ -1634,7 +1805,9 @@ const SimEngine = (function () {
 
   function getState() { return state; }
   function getScenario() { return state ? state.scenario : null; }
-  function getVitalsAt(t) { return getVitals(t); }
+  // Debrief + scene read the RECORDED trajectory so they can never show a
+  // number the trainee did not actually see.
+  function getVitalsAt(t) { return vitalsAtRecorded(t); }
   function getPhaseAt(t) { return getPhase(t); }
 
   // Picker metadata only — authored (un-jittered) values.
@@ -1994,12 +2167,9 @@ const DebriefRenderer = (function () {
 })();
 
 
-<!-- END REPLACEMENT CODE -->
-
-/* Restored after the engine swap: this module lived inside the old
-   Module 1+2 span and was removed with it, while Module 3 still calls
-   VoiceInput for the check-in dictation buttons. Byte-copied from
-   nurse-sepsis-trainer.html so both builds behave identically. */
+/* Restored (again) after an engine port: VoiceInput lives BETWEEN Module 2
+   and Module 3, so any replacement spanning 'Module 1 start -> Module 3
+   start' deletes it while Module 3 still calls it. Port Module 1+2 only. */
 // ---- Voice input: speech recognition dictation for the check-in fields ----
 // (best-effort, browser-dependent; typing always works). The instructor's
 // spoken voice was removed pending a replacement voice agent.
