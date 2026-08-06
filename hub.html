@@ -341,6 +341,28 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     }).catch(() => {});
   }
 
+  // ---- Step 2 bridge: floating vitals monitor driven by the AI patient loop
+  //  (demo-ui.js emits these when a case starts / updates / ends)
+  let vitalsMon = null, latestVitals = null;
+  window.addEventListener('sim-vitals-show', function (e) {
+    if (vitalsMon || typeof window.makeVitalsMonitor !== 'function') return;
+    vitalsMon = window.makeVitalsMonitor(THREE, scene, {
+      position: { x: 1.55, y: 1.5, z: -0.4 },
+      normalRanges: (e.detail && e.detail.normalRanges) || null,
+      faceTarget: camera
+    });
+    latestVitals = null;
+  });
+  window.addEventListener('sim-vitals-update', function (e) {
+    if (!e.detail) return;
+    latestVitals = e.detail.vitals || latestVitals;
+    if (vitalsMon && vitalsMon.setAlarm) vitalsMon.setAlarm(!!e.detail.critical);
+  });
+  window.addEventListener('sim-vitals-hide', function () {
+    if (vitalsMon && vitalsMon.dispose) vitalsMon.dispose();
+    vitalsMon = null; latestVitals = null;
+  });
+
   // ---- main loop ----------------------------------------------------------
   let flatLast = 0, t0 = performance.now();
   renderer.setAnimationLoop((t) => {
@@ -381,10 +403,2146 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       p.emitter.material.opacity = 0.6 + 0.2 * Math.sin(now * 2 + p.delay*6);
     });
 
+    if (vitalsMon && latestVitals) vitalsMon.update(latestVitals, now);
     renderer.render(scene, camera);
   });
   setStatus('Hub ready — click a module (or press Enter VR in a headset).');
 })();
 
+</script>
+<script>
+/*
+ * ============================================================================
+ *  "SILENT CRASH" — Post-operative anaphylaxis scenario (clinical data layer)
+ * ============================================================================
+ *  DRAFT — clinical content pending review by a licensed educator.
+ *
+ *  Guidelines checked (web-verified 2026-08-06):
+ *   - AAAAI/ACAAI Joint Task Force, "Anaphylaxis — a 2020 practice parameter
+ *     update, systematic review, and GRADE analysis" (JACI 2020)
+ *     [cited below as "AAAAI/ACAAI 2020"]
+ *   - AAAAI/ACAAI "Anaphylaxis: a 2023 practice parameter update"
+ *     (Ann Allergy Asthma Immunol 2023) [cited as "AAAAI/ACAAI 2023"]
+ *   - World Allergy Organization Anaphylaxis Guidance 2020 (WAO Journal 2020)
+ *     [cited as "WAO 2020"]
+ *   - Resuscitation Council UK, "Emergency treatment of anaphylaxis:
+ *     Guidelines for healthcare providers", May 2021 [cited as "RCUK 2021"]
+ *   - Pumphrey RS, "Lessons for management of anaphylaxis from a study of
+ *     fatal reactions" (Clin Exp Allergy 2000) — timing of fatal collapse
+ *   - Pumphrey RS, "Fatal posture in anaphylactic shock" (JACI 2003)
+ *
+ *  Key verified numbers:
+ *   - Adult IM epinephrine: 0.5 mg of 1 mg/mL (1:1000), anterolateral thigh,
+ *     repeat after 5 min if no improvement (RCUK 2021; WAO 2020 dosing
+ *     interval 5-15 min; AAAAI/ACAAI 2020 adult max 0.5 mg/dose).
+ *   - Pediatric: 0.01 mg/kg IM of 1 mg/mL; max/dose 0.3 mg per AAAAI/ACAAI
+ *     2020 (WAO 2020 permits up to 0.5 mg max total in larger children).
+ *   - Iatrogenic (drug-induced) anaphylaxis: median time from symptom onset
+ *     to respiratory/cardiac arrest = 5 minutes (Pumphrey 2000) — hence the
+ *     ~6-minute collapse deadline used here.
+ *   - Antihistamines/corticosteroids are NOT first-line and must never delay
+ *     epinephrine (AAAAI/ACAAI 2020 GRADE; RCUK 2021 removed routine steroids).
+ * ============================================================================
+ */
+
+const ANAPHYLAXIS_SCENARIO = {
+  id: 'emerg',                                  // matches the hub panel id
+  title: 'Silent Crash',
+  subtitle: 'Post-op anaphylaxis',
+  difficulty: 'Experienced',
+
+  // --------------------------------------------------------------- PATIENT
+  // Fictional patient — any resemblance to a real person is coincidental.
+  patient: {
+    name: 'Maya Okafor',
+    age: 34,
+    sex: 'female',
+    weightKg: 68,
+    allergies: 'NKDA on chart (no known drug allergies documented)',
+    background:
+      'Healthy 34-year-old, 45 minutes post-op from an open reduction and ' +
+      'internal fixation of a right ankle fracture under spinal anaesthetic. ' +
+      'Transferred to the post-surgical unit awake and comfortable. A second ' +
+      'prophylactic dose of IV cefazolin 2 g in 100 mL normal saline was hung ' +
+      '3 minutes ago and is currently infusing through the left forearm IV. ' +
+      'Cefazolin is a leading cause of perioperative anaphylaxis in North ' +
+      'America and prior uneventful exposure does not rule it out ' +
+      '(AAAAI/ACAAI 2023).'
+  },
+
+  // ------------------------------------------------------------------ SBAR
+  sbar: {
+    situation:
+      'This is Maya Okafor in bed 4, 34-year-old female, 45 minutes post-op ' +
+      'ORIF of the right ankle. She just called out saying she feels itchy ' +
+      'and "a bit off".',
+    background:
+      'Spinal anaesthetic, uneventful case. No documented allergies. ' +
+      'Second dose of IV cefazolin started about 3 minutes ago, still ' +
+      'running. 500 mL of Ringer\'s lactate also infusing at a maintenance ' +
+      'rate. Estimated weight 68 kg.',
+    assessment:
+      'She was completely stable on arrival — heart rate in the 70s, blood ' +
+      'pressure 118/74, sats 98% on room air. Right now she looks flushed, ' +
+      'is scratching at her chest and neck, and her voice sounds a little ' +
+      'hoarse. I have not done a full set of vitals since she called out.',
+    recommendation:
+      'Please assess her now. I have to take a phone call from the OR — ' +
+      'you have the room. The crash cart is in the hallway and the rapid ' +
+      'response number is on the wall.'
+  },
+
+  // Verbatim brief read to the trainee before the sim starts.
+  handoffScript:
+    'You\'re taking over bed 4 — Maya Okafor, 34, about 45 minutes out from ' +
+    'an ankle ORIF under spinal, no known allergies on the chart. Her second ' +
+    'dose of IV cefazolin went up a few minutes ago and is still infusing. ' +
+    'She just rang the bell saying she\'s itchy and feels strange, and her ' +
+    'voice sounded hoarse to me. I\'ve got to step out for a call from the ' +
+    'OR — she\'s all yours.',
+
+  // What the trainee must recognize; never shown to them.
+  hiddenCondition:
+    'IgE-mediated anaphylaxis to IV cefazolin (first documented reaction; ' +
+    'the running antibiotic infusion is the active trigger and must be ' +
+    'stopped immediately — RCUK 2021: remove the trigger if possible, e.g. ' +
+    'stop a drug infusion, without delaying epinephrine).',
+
+  // -------------------------------------------------------- INITIAL VITALS
+  // ~60-90 seconds into the reaction: early systemic signs — sinus
+  // tachycardia, BP drifting down from baseline 118/74, mild desaturation,
+  // tachypnea. Consistent with early distributive shock physiology described
+  // in WAO 2020 / AAAAI-ACAAI 2020. Sits on the t=60s keyframe below.
+  initialVitals: {
+    hr: 112,      // beats/min
+    sbp: 98,      // mmHg
+    dbp: 58,      // mmHg — widened pulse pressure of vasodilatory shock
+    spo2: 94,     // % on room air
+    rr: 24,       // breaths/min
+    tempC: 36.9   // anaphylaxis does not cause fever; stays flat
+  },
+
+  // Monitor color thresholds (standard adult reference ranges).
+  normalRanges: {
+    hr:    [60, 100],
+    sbp:   [90, 140],
+    spo2:  [95, 100],
+    rr:    [12, 20],
+    tempC: [36.1, 37.9]
+  },
+
+  // ----------------------------------------------------- UNTREATED COURSE
+  // Timeline anchored to Pumphrey 2000: in iatrogenic (drug) anaphylaxis the
+  // MEDIAN interval from symptom onset to respiratory/cardiac arrest is
+  // 5 minutes. The sim gives a slightly forgiving 6-minute window.
+  // t = seconds since sim start (sim starts ~60 s after true symptom onset).
+  // Object form consumed directly by PatientLoop's scripted engine:
+  //   untreated[] -> applied while trajectory === 'untreated' (atSeconds vs sim clock)
+  //   treated[]   -> applied after the definitive intervention, timed from the
+  //                  moment epinephrine is given (the engine re-anchors the clock).
+  // Each stage is an ABSOLUTE vitals target (the engine overwrites the given
+  // keys; tempC is left unchanged). The untreated numbers below are the
+  // guideline-verified keyframes; the treated numbers are an engine recovery
+  // trajectory (DRAFT — pending educator review) grounded in IM-epi onset.
+  progressionRules: {
+    collapseBySeconds: 360,   // arrest at 6 min untreated (Pumphrey 2000: median 5 min iatrogenic)
+    interpolate: 'linear',
+    untreated: [
+      //  atSeconds, absolute vitals, observable cue(s)
+      { atSeconds: 0,   vitals: { hr: 112, sbp: 98, dbp: 58, spo2: 94, rr: 24 },
+        cues: ['Flushed, scratching chest and neck; hoarse voice; says "my tongue feels thick".'] },
+      { atSeconds: 60,  vitals: { hr: 120, sbp: 88, dbp: 52, spo2: 92, rr: 26 },
+        cues: ['Raised urticarial wheals spreading across chest and arms; lip swelling; scattered expiratory wheeze.'] },
+      { atSeconds: 120, vitals: { hr: 128, sbp: 78, dbp: 46, spo2: 89, rr: 28 },
+        cues: ['Audible inspiratory stridor; anxious, says "I can\'t breathe right"; sense of impending doom.'] },
+      { atSeconds: 180, vitals: { hr: 136, sbp: 68, dbp: 40, spo2: 85, rr: 30 },
+        cues: ['Pale and clammy, mottled knees; struggling to finish sentences; marked angioedema of lips and tongue.'] },
+      { atSeconds: 240, vitals: { hr: 142, sbp: 58, dbp: 34, spo2: 80, rr: 32 },
+        cues: ['Drowsy, slumping; radial pulse barely palpable; stridor worsening.'] },
+      { atSeconds: 300, vitals: { hr: 146, sbp: 48, dbp: 28, spo2: 72, rr: 30 },
+        cues: ['Obtunded, responds only to pain; gasping respirations; cyanosis of lips.'] },
+      { atSeconds: 360, vitals: { hr: 40, sbp: 0, dbp: 0, spo2: 50, rr: 6 }, critical: true,
+        dialogue: 'The patient is unresponsive, apnoeic, with no palpable pulse.',
+        cues: ['Loses consciousness — bradycardia then pulseless electrical activity: cardiorespiratory arrest.'] }
+    ],
+    // Recovery after 0.5 mg IM epinephrine (1 mg/mL). Timed from the dose.
+    // DRAFT recovery curve pending educator review; onset ~1 min, plateau by ~3 min.
+    treated: [
+      { atSeconds: 30,  vitals: { hr: 118, sbp: 94, dbp: 58, spo2: 93, rr: 24 },
+        cues: ['Colour improving; stridor easing; wheals no longer spreading after IM epinephrine.'] },
+      { atSeconds: 90,  vitals: { hr: 108, sbp: 106, dbp: 66, spo2: 96, rr: 20 },
+        cues: ['Speaking in short sentences; wheeze reduced; wheals fading.'] },
+      { atSeconds: 180, vitals: { hr: 96, sbp: 114, dbp: 72, spo2: 98, rr: 18 },
+        dialogue: '"...I can breathe again. Thank you."',
+        cues: ['Alert and oriented; airway patent; haemodynamically recovered — continue monitoring for biphasic reaction.'] }
+    ],
+    description:
+      'Untreated IgE-mediated reaction to the running cefazolin infusion: ' +
+      'progressive vasodilation and capillary leak (falling BP, rising HR), ' +
+      'upper-airway angioedema (stridor) plus bronchospasm (wheeze, falling ' +
+      'SpO2 and rising RR), ending in cardiovascular collapse at ~6 minutes. ' +
+      'While the infusion keeps running the trajectory steepens (ongoing antigen ' +
+      'load); stopping the infusion alone slows but does NOT reverse the reaction ' +
+      '— only epinephrine bends the curves back.'
+  },
+
+  // ---------------------------------------------------------- INTERVENTIONS
+  interventions: [
+    {
+      id: 'stop-infusion',
+      label: 'Stop the cefazolin infusion',
+      aliases: ['stop the antibiotic', 'stop the infusion', 'clamp the line',
+                'pause the cefazolin', 'turn off the antibiotic', 'stop the drip',
+                'disconnect the antibiotic'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'Removes ongoing antigen exposure: untreated deterioration rate ' +
+          'slows to ~60% of baseline slope but vitals continue to worsen. ' +
+          'Not definitive — mediators already released keep driving the ' +
+          'reaction.',
+        definitive: false,
+        onsetSeconds: 15,
+        note: 'Expected FIRST action when the trigger is a running IV drug. ' +
+              'Keep the IV catheter — you will need the access for fluids.'
+      },
+      clinicalNote:
+        'Remove the trigger if possible, e.g. stop a drug infusion — but do ' +
+        'not let this delay epinephrine (RCUK 2021).'
+    },
+    {
+      id: 'call-for-help',
+      label: 'Call for help / activate rapid response',
+      aliases: ['call a code', 'call rapid response', 'get help', 'call the team',
+                'push the code button', 'call anaesthesia', 'call the doctor'],
+      correct: true,
+      requiresRationale: false,
+      effect: {
+        onVitals: 'No direct vital-sign effect. Unlocks airway-expert and ' +
+                  'second-nurse actions; team arrives at +90 s.',
+        definitive: false,
+        onsetSeconds: 90,
+        note: 'Anaphylaxis with airway involvement is never a solo event.'
+      },
+      clinicalNote:
+        'Call for help early; anaphylaxis is an ABC emergency requiring a ' +
+        'team response (RCUK 2021).'
+    },
+    {
+      id: 'epinephrine-im',
+      label: 'Epinephrine 0.5 mg IM (1 mg/mL), anterolateral thigh',
+      aliases: ['give epi', 'epinephrine', 'adrenaline', 'give adrenaline',
+                'epi IM', 'point five of epi', 'epinephrine IM thigh',
+                'draw up epi', 'give the epi shot'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'Definitive. Onset ~60-90 s after IM injection, clear improvement ' +
+          'over 3-5 min: HR trends toward 100-110 (beta-1 support with ' +
+          'resolving shock), SBP recovers ~10 mmHg/min toward >100, SpO2 ' +
+          'climbs ~2%/min toward >=95, stridor and wheeze fade, RR settles ' +
+          'toward 18-20. Halts and reverses the untreated trajectory.',
+        definitive: true,
+        onsetSeconds: 75,
+        note:
+          'Dose: 0.5 mg = 0.5 mL of the 1 mg/mL (1:1000) ampoule, IM into ' +
+          'the anterolateral mid-thigh (vastus lateralis). Repeat after 5 ' +
+          'min if no improvement. (Adult dose per RCUK 2021; AAAAI/ACAAI ' +
+          '2020: 0.01 mg/kg of 1 mg/mL, adult max 0.5 mg/dose. Pediatric ' +
+          'reference: 0.01 mg/kg IM, max 0.3 mg/dose per AAAAI/ACAAI 2020; ' +
+          'WAO 2020 allows up to 0.5 mg max total in larger children, ' +
+          'repeat every 5-15 min.)'
+      },
+      clinicalNote:
+        'IM epinephrine into the anterolateral thigh is the first-line and ' +
+        'only definitive treatment for anaphylaxis; there is no ' +
+        'contraindication in this setting and delay is the leading cause of ' +
+        'preventable death (AAAAI/ACAAI 2020; WAO 2020; RCUK 2021).'
+    },
+    {
+      id: 'epinephrine-autoinjector',
+      label: 'Epinephrine auto-injector 0.3 mg IM (thigh)',
+      aliases: ['epipen', 'use the epipen', 'auto-injector', 'autoinjector epi'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'Same qualitative reversal as drawn-up IM epinephrine but a 0.3 mg ' +
+          'adult auto-injector dose; in this 68 kg adult it may be slightly ' +
+          'less effective than 0.5 mg — reassess at 5 min and repeat if ' +
+          'Airway/Breathing/Circulation problems persist.',
+        definitive: true,
+        onsetSeconds: 75,
+        note: 'Acceptable if fastest available route; do not wait for an ' +
+              'ampoule if an auto-injector is in hand.'
+      },
+      clinicalNote:
+        'Auto-injectors (typically 0.3 mg adult) are an acceptable ' +
+        'first-line delivery of IM epinephrine; repeat dosing at 5-15 min ' +
+        'intervals as needed (WAO 2020; AAAAI/ACAAI 2023).'
+    },
+    {
+      id: 'epinephrine-repeat',
+      label: 'Repeat epinephrine 0.5 mg IM after 5 minutes',
+      aliases: ['second dose of epi', 'repeat the epi', 'give epi again',
+                'another dose of adrenaline'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'If the first dose gave an incomplete response (or the biphasic ' +
+          'curveball fired), restores the full recovery trajectory. Engine ' +
+          'should reject it as a dosing error if attempted <5 min (300 s) ' +
+          'after the previous IM dose.',
+        definitive: true,
+        onsetSeconds: 75,
+        note: 'Valid only >=300 s after the prior dose AND with persistent ' +
+              'A/B/C compromise.'
+      },
+      clinicalNote:
+        'Repeat IM epinephrine after 5 minutes if airway, breathing, or ' +
+        'circulation problems persist (RCUK 2021; WAO 2020: every 5-15 min).'
+    },
+    {
+      id: 'position-supine-legs-raised',
+      label: 'Lie patient flat, raise legs',
+      aliases: ['lay her flat', 'lie flat', 'raise the legs', 'legs up',
+                'trendelenburg', 'position for shock'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'SBP +8-12 mmHg within ~30 s from improved venous return; slows ' +
+          'the BP decline. Not definitive. If severe respiratory distress ' +
+          'dominates, semi-recumbent with legs raised is acceptable — but ' +
+          'the patient must NOT sit bolt upright or stand.',
+        definitive: false,
+        onsetSeconds: 30,
+        note: 'Sudden upright posture in anaphylactic shock can cause empty ' +
+              'ventricle syndrome and cardiac arrest.'
+      },
+      clinicalNote:
+        'Lie the patient flat with legs raised to support venous return; ' +
+        'fatalities have occurred within seconds of sitting or standing ' +
+        'patients up (RCUK 2021; Pumphrey 2003, "fatal posture").'
+    },
+    {
+      id: 'high-flow-oxygen',
+      label: 'High-flow oxygen 15 L/min non-rebreather',
+      aliases: ['give oxygen', 'oxygen', 'put on a non-rebreather', 'O2',
+                'high flow O2', 'fifteen liters'],
+      correct: true,
+      requiresRationale: false,
+      effect: {
+        onVitals:
+          'SpO2 +3-5% within 60 s while any airway remains patent; does not ' +
+          'change HR/BP trajectory and cannot overcome complete airway ' +
+          'obstruction. Supportive, not definitive.',
+        definitive: false,
+        onsetSeconds: 30,
+        note: 'Give as soon as available; never a substitute for epinephrine.'
+      },
+      clinicalNote:
+        'Give high-flow oxygen (highest concentration available) as soon as ' +
+        'possible in anaphylaxis with respiratory compromise (RCUK 2021).'
+    },
+    {
+      id: 'iv-fluid-bolus',
+      label: 'IV crystalloid bolus 500-1000 mL rapid (adult)',
+      aliases: ['fluid bolus', 'open the fluids', 'give a liter', 'IV fluids',
+                'normal saline bolus', 'run fluids wide open'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'Counteracts capillary-leak hypovolemia: after epinephrine, SBP ' +
+          'recovery accelerates by ~50%; without epinephrine, it only slows ' +
+          'the SBP fall by ~30% and never reverses it. Not definitive.',
+        definitive: false,
+        onsetSeconds: 120,
+        note: 'Use a non-glucose crystalloid. Pediatric reference: 10 mL/kg ' +
+              'bolus (RCUK 2021).'
+      },
+      clinicalNote:
+        'Give a rapid IV crystalloid bolus (adult 500-1000 mL) for ' +
+        'hypotension in anaphylaxis; large fluid shifts occur from ' +
+        'capillary leak (RCUK 2021; WAO 2020).'
+    },
+    {
+      id: 'nebulized-bronchodilator',
+      label: 'Nebulized salbutamol (albuterol) for bronchospasm',
+      aliases: ['salbutamol', 'albuterol', 'give a neb', 'bronchodilator',
+                'ventolin neb'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'ONLY after epinephrine: modest extra help for lower-airway ' +
+          'wheeze (SpO2 +1-2%, RR -2). Given INSTEAD of epinephrine it ' +
+          'does nothing for stridor or BP and the collapse clock keeps ' +
+          'running — treat that ordering as an error.',
+        definitive: false,
+        onsetSeconds: 180,
+        note: 'Adjunct for persistent bronchospasm; no effect on ' +
+              'upper-airway edema or shock.'
+      },
+      clinicalNote:
+        'Inhaled beta-2 agonists are an adjunct for lower-airway ' +
+        'bronchospasm persisting after epinephrine — never a substitute for ' +
+        'it (WAO 2020; RCUK 2021).'
+    },
+    {
+      id: 'antihistamine',
+      label: 'Give IV antihistamine (e.g. diphenhydramine/cetirizine)',
+      aliases: ['benadryl', 'diphenhydramine', 'give an antihistamine',
+                'cetirizine', 'chlorphenamine', 'antihistamine'],
+      correct: false,   // incorrect as a primary/first-line response
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'No effect on HR, BP, SpO2, RR, airway edema, or the collapse ' +
+          'deadline. May reduce itching/hives over 30+ min. If chosen as ' +
+          'the primary treatment, the untreated trajectory continues ' +
+          'unchanged and time is lost.',
+        definitive: false,
+        onsetSeconds: 1800,
+        note: 'Third-line comfort measure for skin symptoms AFTER the ' +
+              'patient is stabilized with epinephrine.'
+      },
+      clinicalNote:
+        'Antihistamines relieve cutaneous symptoms only; they do not treat ' +
+        'or prevent airway obstruction or hypotension, and giving them ' +
+        'first delays epinephrine (AAAAI/ACAAI 2020 GRADE; RCUK 2021 — not ' +
+        'first-line).'
+    },
+    {
+      id: 'corticosteroid',
+      label: 'Give IV corticosteroid (e.g. hydrocortisone)',
+      aliases: ['hydrocortisone', 'steroids', 'give a steroid', 'solu-medrol',
+                'methylprednisolone', 'solu-cortef'],
+      correct: false,   // incorrect as a primary/early response
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'No acute effect on any vital sign; onset hours. Does not ' +
+          'reliably prevent biphasic reactions. If chosen early it wastes ' +
+          'time while the untreated trajectory continues.',
+        definitive: false,
+        onsetSeconds: 14400,
+        note: 'May be considered later for refractory reactions only, after ' +
+              'epinephrine and fluids.'
+      },
+      clinicalNote:
+        'Corticosteroids are no longer recommended routinely in acute ' +
+        'anaphylaxis; evidence does not show they prevent biphasic ' +
+        'reactions, and they must never be prioritized over epinephrine ' +
+        '(AAAAI/ACAAI 2020 GRADE; RCUK 2021).'
+    },
+    {
+      id: 'iv-epinephrine-push',
+      label: 'IV push epinephrine (bolus into the line)',
+      aliases: ['push epi IV', 'give epi through the line', 'IV epinephrine',
+                'epi in the IV', 'bolus of adrenaline IV'],
+      correct: false,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'Dangerous route/dose trap: modeled as HR spiking to 160+ with ' +
+          'ventricular ectopy and hypertensive surge, then requiring the ' +
+          'curveball handler. In a patient WITH a pulse, IV bolus ' +
+          'epinephrine by a non-specialist is an error.',
+        definitive: false,
+        onsetSeconds: 20,
+        note: 'IM route is the correct route for the ward nurse. IV ' +
+              'epinephrine is for cardiac arrest (1 mg of 0.1 mg/mL) or ' +
+              'specialist-run titrated infusions with continuous monitoring.'
+      },
+      clinicalNote:
+        'IV bolus epinephrine in a patient with a pulse risks severe ' +
+        'hypertension, arrhythmia, and myocardial ischemia; IV use is ' +
+        'restricted to experienced specialists with continuous monitoring — ' +
+        'IM is the route for initial treatment (RCUK 2021; AAAAI/ACAAI 2020).'
+    },
+    {
+      id: 'sit-patient-upright',
+      label: 'Sit or stand the patient up',
+      aliases: ['sit her up', 'stand her up', 'walk her to the bathroom',
+                'get her up', 'sit upright'],
+      correct: false,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'Abrupt preload loss in vasodilatory shock: immediate SBP drop of ' +
+          '15-25 mmHg, syncope; if SBP is already <70, triggers immediate ' +
+          'arrest regardless of remaining countdown.',
+        definitive: false,
+        onsetSeconds: 10,
+        note: 'Classic fatal error. Semi-recumbent (with legs raised) is the ' +
+              'compromise if breathing is the dominant problem.'
+      },
+      clinicalNote:
+        'Fatal outcomes have been recorded within seconds of sitting or ' +
+        'standing patients during anaphylactic shock (Pumphrey 2003; RCUK ' +
+        '2021 — do not sit or stand the patient up suddenly).'
+    },
+    {
+      id: 'airway-expert',
+      label: 'Call anaesthesia / airway expert for worsening stridor',
+      aliases: ['call anaesthesia for the airway', 'get the airway team',
+                'prepare for intubation', 'difficult airway team'],
+      correct: true,
+      requiresRationale: true,
+      effect: {
+        onVitals:
+          'No direct vital change; arrives at +180 s and caps how far SpO2 ' +
+          'can fall if the difficult-airway curveball fires. Early call is ' +
+          'credited under Notice/Respond.',
+        definitive: false,
+        onsetSeconds: 180,
+        note: 'Progressive angioedema can make late intubation impossible — ' +
+              'escalate while the patient can still be oxygenated.'
+      },
+      clinicalNote:
+        'With stridor or progressive angioedema, summon expert airway help ' +
+        'early; delayed intubation in anaphylaxis is high-risk (RCUK 2021).'
+    },
+    {
+      id: 'full-vitals-monitor',
+      label: 'Attach monitor / take full set of vitals',
+      aliases: ['get vitals', 'put her on the monitor', 'check blood pressure',
+                'check sats', 'take her vitals', 'hook up the monitor'],
+      correct: true,
+      requiresRationale: false,
+      effect: {
+        onVitals: 'No physiologic effect; reveals the live numbers on the ' +
+                  'monitor and starts trend display. Credited under Notice.',
+        definitive: false,
+        onsetSeconds: 20,
+        note: 'Assessment must not delay stopping the infusion or epinephrine ' +
+              'once anaphylaxis is clinically evident — the diagnosis is ' +
+              'clinical.'
+      },
+      clinicalNote:
+        'Anaphylaxis is a clinical diagnosis: acute onset with skin/mucosal ' +
+        'signs plus respiratory or circulatory compromise after a likely ' +
+        'allergen meets criteria — treat without waiting for tests ' +
+        '(WAO 2020 diagnostic criteria; AAAAI/ACAAI 2020).'
+    }
+  ],
+
+  // ------------------------------------------------------------ CURVEBALLS
+  curveballPool: [
+    {
+      id: 'biphasic-reaction',
+      trigger:
+        'Fires 240-420 s after full recovery from the first reaction, with ' +
+        'higher probability if only one epinephrine dose was needed and no ' +
+        'observation/monitoring was verbalized.',
+      description:
+        'Symptoms recur without re-exposure: hives return, wheeze, SBP ' +
+        'drifts down 5 mmHg per 30 s. Trainee must recognize a biphasic ' +
+        'reaction and re-treat with IM epinephrine (repeat-dose rules apply).',
+      effect:
+        'Restarts a gentler untreated trajectory (70% slope). Reinforces ' +
+        'that biphasic reactions occur in roughly 1-20% of cases, typically ' +
+        'within hours, and are the reason for post-event observation ' +
+        '(AAAAI/ACAAI 2020; WAO 2020). Corticosteroids given earlier do NOT ' +
+        'suppress this curveball — matching the evidence.'
+    },
+    {
+      id: 'difficult-airway',
+      trigger:
+        'Fires if epinephrine is delayed beyond 180 s and stridor cues have ' +
+        'played twice.',
+      description:
+        'Tongue and laryngeal angioedema progress: voice lost, stridor ' +
+        'becomes severe, SpO2 decline steepens by 50%. Bag-mask becomes ' +
+        'difficult; only the airway expert action plus epinephrine can ' +
+        'stabilize.',
+      effect:
+        'Tests early escalation. If the airway-expert call was already ' +
+        'made, the team arrives in time and SpO2 floor is 82%; if not, ' +
+        'collapse deadline shortens by 60 s (RCUK 2021 — call airway help ' +
+        'early).'
+    },
+    {
+      id: 'wrong-dose-trap',
+      trigger:
+        'Fires when the trainee asks for epinephrine: a colleague voice ' +
+        'offers a prefilled 10 mL syringe of 0.1 mg/mL (1:10,000) "cardiac ' +
+        'epi — want me to push the whole thing IV?"',
+      description:
+        'The trainee must refuse the IV push, and state the correct order: ' +
+        '0.5 mg IM of the 1 mg/mL (1:1000) concentration into the ' +
+        'anterolateral thigh.',
+      effect:
+        'Accepting the push routes to the iv-epinephrine-push adverse ' +
+        'effect (arrhythmia/hypertensive surge). Correct refusal with the ' +
+        'right concentration verbalized earns full "interpret" points ' +
+        '(concentration confusion is a recognized cause of epinephrine ' +
+        'overdose errors — AAAAI/ACAAI 2020; RCUK 2021 route guidance).'
+    },
+    {
+      id: 'refractory-hypotension',
+      trigger:
+        'Fires (low probability, harder difficulty) if the first ' +
+        'epinephrine dose was given after 240 s: SBP plateaus at 78 instead ' +
+        'of recovering.',
+      description:
+        'Partial response to the first dose. Trainee must reassess at 5 ' +
+        'minutes, give the repeat IM dose, and give/repeat the fluid bolus.',
+      effect:
+        'Second IM dose plus 500-1000 mL crystalloid restores the recovery ' +
+        'trajectory; teaches the 5-minute reassess-and-repeat loop ' +
+        '(RCUK 2021; WAO 2020 repeat interval 5-15 min).'
+    }
+  ],
+
+  // --------------------------------------------------------------- SCORING
+  // Tanner's Clinical Judgment Model framing: Notice / Interpret / Respond.
+  scoringRubric: {
+    // Sim target: epinephrine within 2 min of sim start. Median time to
+    // arrest in fatal drug-induced anaphylaxis is only 5 min from symptom
+    // onset (Pumphrey 2000), and every guideline stresses "without delay"
+    // (AAAAI/ACAAI 2020; WAO 2020; RCUK 2021).
+    timeToEpinephrineTargetSeconds: 120,
+    criteria: [
+      { id: 'notice-skin-airway',
+        dimension: 'notice',
+        descriptor: 'Identifies the cluster of urticaria/flushing, lip/tongue swelling, and hoarse voice as significant within the first 60 s.',
+        points: 10 },
+      { id: 'notice-infusion-link',
+        dimension: 'notice',
+        descriptor: 'Notices that a new IV antibiotic (cefazolin) is actively infusing and links symptom onset to it.',
+        points: 10 },
+      { id: 'notice-vitals-trend',
+        dimension: 'notice',
+        descriptor: 'Obtains/monitors vitals and tracks the trend (rising HR/RR, falling BP/SpO2) rather than a single snapshot.',
+        points: 5 },
+      { id: 'interpret-anaphylaxis',
+        dimension: 'interpret',
+        descriptor: 'States the working diagnosis of anaphylaxis using clinical criteria (acute skin/mucosal signs plus respiratory or circulatory compromise after a likely allergen — WAO 2020), not just "allergic reaction".',
+        points: 15 },
+      { id: 'interpret-rationale-epi',
+        dimension: 'interpret',
+        descriptor: 'Articulates WHY epinephrine is first-line (reverses vasodilation, capillary leak, and bronchospasm; antihistamines/steroids cannot) when prompted for rationale.',
+        points: 15 },
+      { id: 'respond-stop-trigger',
+        dimension: 'respond',
+        descriptor: 'Stops the cefazolin infusion as an immediate action (RCUK 2021: remove the trigger).',
+        points: 10 },
+      { id: 'respond-epi-correct',
+        dimension: 'respond',
+        descriptor: 'Gives epinephrine 0.5 mg IM of the 1 mg/mL concentration into the anterolateral thigh within the 120 s target, stating dose, concentration, route, and site.',
+        points: 20 },
+      { id: 'respond-supportive-bundle',
+        dimension: 'respond',
+        descriptor: 'Delivers the supportive bundle in a defensible order: help called, supine with legs raised, high-flow oxygen, IV crystalloid bolus for hypotension.',
+        points: 10 },
+      { id: 'respond-reassess-repeat',
+        dimension: 'respond',
+        descriptor: 'Reassesses at 5 minutes and repeats IM epinephrine if A/B/C problems persist (or correctly manages the biphasic recurrence), and verbalizes the need for post-event observation.',
+        points: 5 }
+    ],
+    hardFails: [
+      'Gave an antihistamine or corticosteroid as the primary treatment before epinephrine (AAAAI/ACAAI 2020; RCUK 2021).',
+      'Epinephrine delayed beyond 240 s (4 min) from sim start — patient arrests at 360 s untreated (deadline anchored to Pumphrey 2000).',
+      'Never stopped the running cefazolin infusion during the scenario.',
+      'Administered IV bolus epinephrine in a patient with a pulse (accepted the wrong-dose trap).',
+      'Sat or stood the patient upright while hypotensive (fatal-posture error — Pumphrey 2003; RCUK 2021).',
+      'Wrong epinephrine dose or concentration stated/given (e.g. 5 mg, or 0.5 mL of 0.1 mg/mL) without self-correction.'
+    ]
+  }
+};
+
+// UMD-style tail: browser global + Node export.
+if (typeof window !== 'undefined') {
+  window.ANAPHYLAXIS_SCENARIO = ANAPHYLAXIS_SCENARIO;
+} else if (typeof module !== 'undefined' && module.exports) {
+  module.exports = ANAPHYLAXIS_SCENARIO;
+}
+</script>
+<script>
+/**
+ * patient-loop.js — Live "AI patient" game loop for the nurse-training simulation.
+ *
+ * Exposes a single global: window.PatientLoop
+ *
+ *   PatientLoop.init(scenario, callbacks)   // callbacks = { onTurn(state), onError(msg, degraded), onEnd(summary) }
+ *   PatientLoop.start()                     // seeds gameState from scenario.initialVitals, fires onTurn (no API call)
+ *   PatientLoop.sendCommand(text)           // async: one turn (Claude or scripted fallback) -> Promise<state>
+ *   PatientLoop.tickTime(seconds)           // advance sim clock; may trigger untreated-progression deterioration
+ *   PatientLoop.getState()                  // current gameState
+ *   PatientLoop.getTranscript()             // [{role, text}, ...] for the After-Action Report
+ *   PatientLoop.hasKey() / setKey(k) / getKeyStoreName()
+ *
+ * The Claude role-plays the deteriorating patient and returns strict JSON
+ * (structured outputs). If there is no API key, or any call fails (network,
+ * non-2xx, refusal, unparseable JSON), the module degrades to a deterministic
+ * SCRIPTED engine driven purely by scenario.progressionRules + scenario.interventions,
+ * so the scenario remains fully playable offline.
+ *
+ * Pure logic + API only — no DOM, no rendering. The UI subscribes via callbacks.
+ */
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // Constants
+  // ------------------------------------------------------------------
+  var API_URL = 'https://api.anthropic.com/v1/messages';
+  var API_VERSION = '2023-06-01';
+  var MODEL = 'claude-opus-5';
+  var MAX_TOKENS = 1024;
+  var KEY_STORE_NAME = 'nurse-sim-anthropic-key'; // shared with sibling tool — do not change
+  var CALL_TIMEOUT_MS = 90000;
+  var DEFAULT_SECONDS_PER_TURN = 30;
+
+  // Physiologically sane clamp ranges for anything the model (or data) returns.
+  var VITAL_RANGES = {
+    hr:    { min: 20,  max: 220,   int: true },
+    sbp:   { min: 40,  max: 260,   int: true },
+    dbp:   { min: 20,  max: 160,   int: true },
+    spo2:  { min: 50,  max: 100,   int: true },
+    rr:    { min: 4,   max: 60,    int: true },
+    tempC: { min: 30,  max: 43.5,  int: false }
+  };
+
+  // Strict JSON schema the model must return each turn (structured outputs).
+  var TURN_SCHEMA = {
+    type: 'object',
+    properties: {
+      patientDialogue: { type: 'string' },
+      updatedVitals: {
+        type: 'object',
+        properties: {
+          hr: { type: 'integer' }, sbp: { type: 'integer' }, dbp: { type: 'integer' },
+          spo2: { type: 'integer' }, rr: { type: 'integer' }, tempC: { type: 'number' }
+        },
+        required: ['hr', 'sbp', 'dbp', 'spo2', 'rr', 'tempC'],
+        additionalProperties: false
+      },
+      visibleCues: { type: 'array', items: { type: 'string' } },
+      hiddenCondition: { type: 'string' },
+      clinicalAssessment: { type: 'string' },
+      timeElapsedSeconds: { type: 'integer' },
+      critical: { type: 'boolean' }
+    },
+    required: ['patientDialogue', 'updatedVitals', 'visibleCues', 'hiddenCondition',
+               'clinicalAssessment', 'timeElapsedSeconds', 'critical'],
+    additionalProperties: false
+  };
+
+  // ------------------------------------------------------------------
+  // Module state
+  // ------------------------------------------------------------------
+  var scenario = null;
+  var callbacks = { onTurn: noop, onError: noop, onEnd: noop };
+  var gameState = null;
+  var transcript = [];      // [{role, text}]
+  var degraded = false;     // true once we've fallen back to the scripted engine
+  var ended = false;
+  var appliedStages = {};   // per-trajectory set of stage indexes already applied (scripted engine)
+
+  function noop() {}
+
+  // ------------------------------------------------------------------
+  // Small utilities
+  // ------------------------------------------------------------------
+  function isObj(v) { return v !== null && typeof v === 'object' && !isArr(v); }
+  function isArr(v) { return Object.prototype.toString.call(v) === '[object Array]'; }
+
+  function clampVitals(v) {
+    var out = {};
+    var current = (gameState && gameState.vitals) || {};
+    for (var k in VITAL_RANGES) {
+      if (!VITAL_RANGES.hasOwnProperty(k)) continue;
+      var r = VITAL_RANGES[k];
+      var raw = (v && typeof v[k] === 'number' && isFinite(v[k])) ? v[k] : current[k];
+      if (typeof raw !== 'number' || !isFinite(raw)) raw = (r.min + r.max) / 2;
+      var val = Math.min(r.max, Math.max(r.min, raw));
+      out[k] = r.int ? Math.round(val) : Math.round(val * 10) / 10;
+    }
+    return out;
+  }
+
+  function safeCb(fn, a, b) {
+    try { fn(a, b); } catch (e) { /* never let a UI callback crash the loop */ }
+  }
+
+  function pushTranscript(role, text) {
+    if (typeof text === 'string' && text.length) transcript.push({ role: role, text: text });
+  }
+
+  function cloneState() {
+    // Shallow-ish clone so UI code can't mutate internal state.
+    return JSON.parse(JSON.stringify(gameState));
+  }
+
+  // ------------------------------------------------------------------
+  // API key handling (sessionStorage only — never localStorage, never logged)
+  // ------------------------------------------------------------------
+  function getKey() {
+    try { return window.sessionStorage.getItem(KEY_STORE_NAME) || ''; }
+    catch (e) { return ''; }
+  }
+  function hasKey() { return getKey().length > 0; }
+  function setKey(k) {
+    try {
+      if (typeof k === 'string' && k.length) window.sessionStorage.setItem(KEY_STORE_NAME, k);
+      else window.sessionStorage.removeItem(KEY_STORE_NAME);
+    } catch (e) { /* storage unavailable (private mode) — fallback engine still works */ }
+  }
+
+  // ------------------------------------------------------------------
+  // Scenario accessors (everything clinical comes from the scenario object)
+  // ------------------------------------------------------------------
+  function scenarioInterventions() {
+    var iv = scenario && scenario.interventions;
+    if (isArr(iv)) return iv;
+    if (isObj(iv)) {
+      var list = [];
+      for (var name in iv) {
+        if (!iv.hasOwnProperty(name)) continue;
+        var entry = isObj(iv[name]) ? iv[name] : { effect: iv[name] };
+        if (!entry.name) entry = mergeName(entry, name);
+        list.push(entry);
+      }
+      return list;
+    }
+    return [];
+  }
+
+  function mergeName(entry, name) {
+    var copy = {};
+    for (var k in entry) if (entry.hasOwnProperty(k)) copy[k] = entry[k];
+    copy.name = name;
+    return copy;
+  }
+
+  function stagesFor(trajectory) {
+    var pr = scenario && scenario.progressionRules;
+    if (!pr) return [];
+    if (isArr(pr)) return trajectory === 'untreated' ? pr : [];
+    // object form: { untreated: [...], treated|definitive|recovery: [...] }
+    if (trajectory === 'untreated') return pr.untreated || pr.deterioration || [];
+    return pr.treated || pr.definitive || pr.recovery || pr.improvement || [];
+  }
+
+  function stageTime(stage) {
+    var t = stage.atSeconds; if (typeof t !== 'number') t = stage.timeSeconds;
+    if (typeof t !== 'number') t = stage.time;
+    if (typeof t !== 'number') t = stage.at;
+    return (typeof t === 'number' && isFinite(t)) ? t : 0;
+  }
+
+  function isDefinitiveIntervention(entry) {
+    if (!entry) return false;
+    if (entry.definitive === true || entry.isDefinitive === true || entry.correct === true) return true;
+    var dn = scenario && (scenario.definitiveIntervention || scenario.definitiveTreatment);
+    if (typeof dn === 'string' && entry.name &&
+        String(entry.name).toLowerCase() === dn.toLowerCase()) return true;
+    return false;
+  }
+
+  function matchIntervention(commandText) {
+    var text = String(commandText || '').toLowerCase();
+    var list = scenarioInterventions();
+    for (var i = 0; i < list.length; i++) {
+      var entry = list[i];
+      var keys = entry.keywords || entry.aliases || entry.match || [];
+      if (typeof keys === 'string') keys = [keys];
+      var names = [];
+      if (entry.name) names.push(String(entry.name));
+      if (entry.id) names.push(String(entry.id));
+      var candidates = keys.concat(names);
+      for (var j = 0; j < candidates.length; j++) {
+        var kw = String(candidates[j]).toLowerCase();
+        if (kw.length >= 3 && text.indexOf(kw) !== -1) return entry;
+      }
+    }
+    return null;
+  }
+
+  function hasRationale(text) {
+    // Crude heuristic used only by the offline fallback's clinicalAssessment.
+    return /\b(because|since|so that|to (?:prevent|treat|reverse|stop|reduce|support|maintain|counter|open|improve|raise|stabili[sz]e)|rationale|due to|in case|given (?:the|that))\b/i
+      .test(String(text || ''));
+  }
+
+  // ------------------------------------------------------------------
+  // Deterministic SCRIPTED engine (offline fallback — fully playable)
+  // ------------------------------------------------------------------
+  function applyVitalChanges(base, change) {
+    // change may be { vitals:{...absolute} } | { vitalsDelta:{...} } | flat {hr:...} treated as absolute
+    var next = {};
+    for (var k in base) if (base.hasOwnProperty(k)) next[k] = base[k];
+    if (!change) return next;
+    var abs = change.vitals || change.targets || null;
+    var delta = change.vitalsDelta || change.deltas || change.effect || change.vitalsEffect || null;
+    if (!abs && !delta) {
+      // flat object with vital keys -> absolute targets
+      var flat = {};
+      var found = false;
+      for (var vk in VITAL_RANGES) {
+        if (VITAL_RANGES.hasOwnProperty(vk) && typeof change[vk] === 'number') { flat[vk] = change[vk]; found = true; }
+      }
+      if (found) abs = flat;
+    }
+    var key;
+    if (abs) {
+      for (key in abs) if (abs.hasOwnProperty(key) && VITAL_RANGES[key]) next[key] = abs[key];
+    }
+    if (delta && isObj(delta)) {
+      for (key in delta) {
+        if (delta.hasOwnProperty(key) && VITAL_RANGES[key] && typeof delta[key] === 'number') {
+          next[key] = (typeof next[key] === 'number' ? next[key] : 0) + delta[key];
+        }
+      }
+    }
+    return next;
+  }
+
+  function applyProgression() {
+    // Apply every not-yet-applied stage on the current trajectory whose time
+    // threshold has been reached. Deterministic; returns text pieces to surface.
+    var trajectory = gameState.trajectory;
+    var stages = stagesFor(trajectory);
+    var applied = appliedStages[trajectory] || (appliedStages[trajectory] = {});
+    var dialogue = null, cues = null, critical = false, exhausted = true;
+
+    for (var i = 0; i < stages.length; i++) {
+      var st = stages[i];
+      if (applied[i]) continue;
+      if (stageTime(st) <= gameState.timeElapsedSeconds) {
+        applied[i] = true;
+        gameState.vitals = clampVitals(applyVitalChanges(gameState.vitals, st));
+        if (st.dialogue || st.patientDialogue) dialogue = st.dialogue || st.patientDialogue;
+        if (st.cues || st.visibleCues) cues = st.cues || st.visibleCues;
+        if (st.critical === true || st.arrest === true) critical = true;
+      } else {
+        exhausted = false;
+      }
+    }
+    // exhausted is only meaningful when the trajectory actually has stages.
+    exhausted = exhausted && stages.length > 0;
+    return { dialogue: dialogue, cues: cues, critical: critical, exhausted: exhausted };
+  }
+
+  function scriptedTurn(commandText, advanceSeconds) {
+    gameState.timeElapsedSeconds += advanceSeconds;
+
+    var dialogue = '';
+    var cues = gameState.visibleCues.slice();
+    var assessmentParts = [];
+    var critical = false;
+
+    // 1. Handle the trainee's action (if any) against scenario.interventions.
+    if (typeof commandText === 'string' && commandText.length) {
+      var entry = matchIntervention(commandText);
+      if (entry) {
+        gameState.interventionsTaken.push({
+          name: String(entry.name || entry.id || 'intervention'),
+          atSeconds: gameState.timeElapsedSeconds
+        });
+        gameState.vitals = clampVitals(applyVitalChanges(gameState.vitals, entry));
+        if (isDefinitiveIntervention(entry)) {
+          if (!gameState.epinephrineGiven) {
+            gameState.epinephrineGiven = true;
+            gameState.epinephrineGivenAtSeconds = gameState.timeElapsedSeconds;
+          }
+          gameState.trajectory = 'treated';
+          // Re-anchor treated stages relative to when treatment was given.
+          gameState.treatedAnchorSeconds = gameState.timeElapsedSeconds;
+          assessmentParts.push('Correct: definitive treatment given — the patient should begin to improve.');
+        } else if (entry.correct === false || entry.harmful === true) {
+          assessmentParts.push('Incorrect or harmful action for this presentation; deterioration continues.');
+        } else {
+          assessmentParts.push('Supportive measure taken; it helps but is not definitive treatment.');
+        }
+        if (entry.response || entry.dialogue) dialogue = entry.response || entry.dialogue;
+        if (entry.cues || entry.visibleCues) cues = (entry.cues || entry.visibleCues).slice();
+      } else {
+        assessmentParts.push('That action is not an effective intervention here; the patient continues on the untreated course.');
+      }
+      if (!hasRationale(commandText)) {
+        assessmentParts.push('No rationale was stated — justify each action.');
+      }
+    }
+
+    // 2. Apply time-based progression on the current trajectory.
+    var savedElapsed = gameState.timeElapsedSeconds;
+    if (gameState.trajectory === 'treated' && typeof gameState.treatedAnchorSeconds === 'number') {
+      // Treated stages are timed from the moment of definitive treatment.
+      gameState.timeElapsedSeconds = savedElapsed - gameState.treatedAnchorSeconds;
+    }
+    var prog = applyProgression();
+    gameState.timeElapsedSeconds = savedElapsed;
+
+    if (prog.dialogue) dialogue = prog.dialogue;
+    if (prog.cues) cues = prog.cues.slice();
+    if (prog.critical) critical = true;
+
+    // 3. Default in-character dialogue derived from state severity if none supplied.
+    if (!dialogue) {
+      var v = gameState.vitals;
+      if (critical) {
+        dialogue = 'The patient is unresponsive with no palpable pulse.';
+      } else if (v.spo2 < 85 || v.sbp < 75) {
+        dialogue = '(Gasping, barely able to speak) "...can\'t... breathe..."';
+      } else if (gameState.trajectory === 'treated') {
+        dialogue = '"I think... it\'s getting a little easier to breathe."';
+      } else {
+        dialogue = '"I don\'t feel right... it\'s getting harder to breathe."';
+      }
+    }
+    if (!assessmentParts.length) {
+      assessmentParts.push(gameState.trajectory === 'treated'
+        ? 'Patient responding to treatment; continue monitoring.'
+        : 'No effective action this turn; the patient is deteriorating per the untreated trajectory.');
+    }
+
+    gameState.visibleCues = cues;
+    gameState.critical = critical;
+    gameState.lastAssessment = assessmentParts.join(' ');
+
+    pushTranscript('patient', dialogue);
+    pushTranscript('assessment', gameState.lastAssessment);
+
+    var state = cloneState();
+    state.patientDialogue = dialogue;
+    safeCb(callbacks.onTurn, state);
+    if (critical) {
+      endScenario('arrest');
+    } else if (gameState.trajectory === 'treated' && prog.exhausted) {
+      endScenario('stabilized');
+    }
+    return state;
+  }
+
+  // ------------------------------------------------------------------
+  // Live Claude engine
+  // ------------------------------------------------------------------
+  function buildSystemPrompt() {
+    return [
+      'You ARE a simulated patient in a nursing training exercise. Stay in character at all times.',
+      'You are experiencing ' + String(scenario.hiddenCondition || 'an acute medical emergency') +
+        ' but you do NOT state your diagnosis — you only report symptoms and respond to what the nurse does.',
+      '',
+      'NEVER fabricate clinical facts. Vital-sign changes must follow the physiology described in the',
+      "scenario's progressionRules and interventions below. If the nurse gives the correct, timely",
+      'treatment, the patient improves along the described definitive path; if they give a wrong or',
+      'delayed treatment, deterioration continues per the untreated trajectory.',
+      '',
+      'Reward reasoning: the nurse must justify actions. If they act without a rationale, note it in',
+      'clinicalAssessment.',
+      '',
+      'SCENARIO DATA (authoritative — follow it exactly):',
+      'hiddenCondition: ' + JSON.stringify(scenario.hiddenCondition || null),
+      'progressionRules: ' + JSON.stringify(scenario.progressionRules || null),
+      'interventions: ' + JSON.stringify(scenario.interventions || null),
+      '',
+      'CURRENT VITALS: ' + JSON.stringify(gameState.vitals),
+      '',
+      'Respond ONLY as the JSON object. Do not add commentary outside it.'
+    ].join('\n');
+  }
+
+  function buildUserMessage(commandText, advanceSeconds) {
+    var recent = transcript.slice(-10);
+    return [
+      'FULL CURRENT GAME STATE (the API is stateless — this is the complete context):',
+      JSON.stringify({
+        vitals: gameState.vitals,
+        timeElapsedSeconds: gameState.timeElapsedSeconds,
+        visibleCues: gameState.visibleCues,
+        interventionsTaken: gameState.interventionsTaken,
+        epinephrineGiven: gameState.epinephrineGiven,
+        epinephrineGivenAtSeconds: gameState.epinephrineGivenAtSeconds,
+        trajectory: gameState.trajectory
+      }),
+      '',
+      'RECENT TRANSCRIPT:',
+      JSON.stringify(recent),
+      '',
+      'This turn advances the simulation clock by ' + advanceSeconds + ' seconds.',
+      '',
+      "NURSE'S COMMAND AND RATIONALE THIS TURN:",
+      JSON.stringify(String(commandText))
+    ].join('\n');
+  }
+
+  function callClaude(commandText, advanceSeconds) {
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, CALL_TIMEOUT_MS) : null;
+
+    var body = {
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      thinking: { type: 'disabled' },
+      output_config: {
+        effort: 'low',
+        format: { type: 'json_schema', schema: TURN_SCHEMA }
+      },
+      system: buildSystemPrompt(),
+      messages: [{ role: 'user', content: buildUserMessage(commandText, advanceSeconds) }]
+    };
+
+    return fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': getKey(),
+        'anthropic-version': API_VERSION,
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify(body),
+      signal: controller ? controller.signal : undefined
+    }).then(function (resp) {
+      if (timer) clearTimeout(timer);
+      var requestId = null;
+      try { requestId = resp.headers.get('request-id'); } catch (e) {}
+      if (!resp.ok) {
+        // Non-2xx does NOT throw — read the error body ourselves.
+        return resp.json().then(function (err) {
+          var msg = (err && err.error && err.error.message) ? err.error.message : ('HTTP ' + resp.status);
+          throw makeApiError('The AI patient service returned an error (' + msg + ').', requestId);
+        }, function () {
+          throw makeApiError('The AI patient service returned an error (HTTP ' + resp.status + ').', requestId);
+        });
+      }
+      return resp.json().then(function (data) {
+        data.__requestId = requestId;
+        return data;
+      });
+    }, function (netErr) {
+      if (timer) clearTimeout(timer);
+      var isAbort = netErr && netErr.name === 'AbortError';
+      throw makeApiError(isAbort
+        ? 'The AI patient took too long to respond (90s timeout).'
+        : 'Could not reach the AI patient service (offline or blocked network).', null);
+    });
+  }
+
+  function makeApiError(message, requestId) {
+    var e = new Error(message);
+    e.isPatientLoopApiError = true;
+    e.requestId = requestId || null;
+    return e;
+  }
+
+  function parseTurnResponse(data) {
+    if (data && data.stop_reason === 'refusal') {
+      throw makeApiError('The AI declined to role-play this turn.', data.__requestId);
+    }
+    var text = null;
+    var content = (data && data.content) || [];
+    for (var i = 0; i < content.length; i++) {
+      if (content[i] && content[i].type === 'text') { text = content[i].text; break; }
+    }
+    if (typeof text !== 'string' || !text.length) {
+      throw makeApiError('The AI patient returned an empty response.', data && data.__requestId);
+    }
+    var turn;
+    try { turn = JSON.parse(text); }
+    catch (e) { throw makeApiError('The AI patient returned unreadable data.', data && data.__requestId); }
+
+    // Validate the shape even though structured outputs should guarantee it.
+    var required = ['patientDialogue', 'updatedVitals', 'visibleCues', 'hiddenCondition',
+                    'clinicalAssessment', 'timeElapsedSeconds', 'critical'];
+    for (var j = 0; j < required.length; j++) {
+      if (!(required[j] in turn)) {
+        throw makeApiError('The AI patient returned incomplete data.', data && data.__requestId);
+      }
+    }
+    return turn;
+  }
+
+  function applyModelTurn(turn, commandText, advanceSeconds) {
+    // Clamp/validate everything before it reaches the UI.
+    gameState.vitals = clampVitals(turn.updatedVitals);
+    gameState.visibleCues = isArr(turn.visibleCues)
+      ? turn.visibleCues.map(function (c) { return String(c); })
+      : gameState.visibleCues;
+    var modelTime = (typeof turn.timeElapsedSeconds === 'number' && isFinite(turn.timeElapsedSeconds))
+      ? Math.round(turn.timeElapsedSeconds) : 0;
+    gameState.timeElapsedSeconds = Math.max(gameState.timeElapsedSeconds + advanceSeconds, modelTime);
+    gameState.critical = turn.critical === true;
+    gameState.lastAssessment = String(turn.clinicalAssessment || '');
+
+    // Track interventions locally too, so the fallback (if we degrade later)
+    // and the AAR know what has been done and when.
+    var entry = matchIntervention(commandText);
+    if (entry) {
+      gameState.interventionsTaken.push({
+        name: String(entry.name || entry.id || 'intervention'),
+        atSeconds: gameState.timeElapsedSeconds
+      });
+      if (isDefinitiveIntervention(entry) && !gameState.epinephrineGiven) {
+        gameState.epinephrineGiven = true;
+        gameState.epinephrineGivenAtSeconds = gameState.timeElapsedSeconds;
+        gameState.trajectory = 'treated';
+        gameState.treatedAnchorSeconds = gameState.timeElapsedSeconds;
+      }
+    }
+
+    var dialogue = String(turn.patientDialogue || '');
+    pushTranscript('patient', dialogue);
+    pushTranscript('assessment', gameState.lastAssessment);
+
+    var state = cloneState();
+    state.patientDialogue = dialogue;
+    safeCb(callbacks.onTurn, state);
+    if (gameState.critical) endScenario('arrest');
+    return state;
+  }
+
+  // ------------------------------------------------------------------
+  // Degradation + end-of-scenario
+  // ------------------------------------------------------------------
+  function degrade(message, requestId) {
+    degraded = true;
+    var msg = message + ' Continuing with the built-in scripted patient so the scenario stays playable.';
+    if (requestId) {
+      // Log the request id (never the key) to aid debugging live demos.
+      try { console.warn('[PatientLoop] request-id: ' + requestId); } catch (e) {}
+    }
+    safeCb(callbacks.onError, msg, true);
+  }
+
+  function endScenario(outcome) {
+    if (ended) return;
+    ended = true;
+    safeCb(callbacks.onEnd, {
+      outcome: outcome, // 'arrest' | 'stabilized'
+      hiddenCondition: scenario ? scenario.hiddenCondition : null,
+      timeElapsedSeconds: gameState.timeElapsedSeconds,
+      interventionsTaken: gameState.interventionsTaken.slice(),
+      epinephrineGiven: gameState.epinephrineGiven,
+      epinephrineGivenAtSeconds: gameState.epinephrineGivenAtSeconds,
+      finalVitals: clampVitals(gameState.vitals),
+      degraded: degraded,
+      transcript: transcript.slice()
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Public API
+  // ------------------------------------------------------------------
+  var PatientLoop = {
+
+    init: function (scenarioObj, cbs) {
+      if (!isObj(scenarioObj)) throw new Error('PatientLoop.init: scenario object is required');
+      scenario = scenarioObj;
+      cbs = cbs || {};
+      callbacks = {
+        onTurn: typeof cbs.onTurn === 'function' ? cbs.onTurn : noop,
+        onError: typeof cbs.onError === 'function' ? cbs.onError : noop,
+        onEnd: typeof cbs.onEnd === 'function' ? cbs.onEnd : noop
+      };
+      degraded = false;
+      ended = false;
+      transcript = [];
+      appliedStages = {};
+      gameState = null;
+      return PatientLoop;
+    },
+
+    start: function () {
+      if (!scenario) throw new Error('PatientLoop.start: call init(scenario, callbacks) first');
+      degraded = false;
+      ended = false;
+      transcript = [];
+      appliedStages = {};
+      gameState = {
+        vitals: clampVitals(scenario.initialVitals || {}),
+        timeElapsedSeconds: 0,
+        visibleCues: isArr(scenario.initialCues) ? scenario.initialCues.slice() : [],
+        interventionsTaken: [],
+        epinephrineGiven: false,
+        epinephrineGivenAtSeconds: null,
+        trajectory: 'untreated',
+        treatedAnchorSeconds: null,
+        critical: false,
+        lastAssessment: ''
+      };
+      var opening = String(
+        scenario.openingDialogue || scenario.openingLine ||
+        '"Nurse... something\'s wrong. I feel strange."'
+      );
+      pushTranscript('patient', opening);
+
+      if (!hasKey()) {
+        degraded = true;
+        safeCb(callbacks.onError,
+          'An Anthropic API key is needed for the live AI patient. Add it to run the scenario.',
+          true);
+      }
+
+      var state = cloneState();
+      state.patientDialogue = opening;
+      safeCb(callbacks.onTurn, state); // seed turn — no API call needed
+      return state;
+    },
+
+    sendCommand: function (text) {
+      if (!gameState) return Promise.reject(new Error('PatientLoop.sendCommand: call start() first'));
+      if (ended) return Promise.resolve(cloneState());
+      var command = String(text || '').trim();
+      var advance = (scenario && typeof scenario.secondsPerTurn === 'number')
+        ? scenario.secondsPerTurn : DEFAULT_SECONDS_PER_TURN;
+
+      pushTranscript('nurse', command);
+
+      if (degraded || !hasKey()) {
+        if (!degraded) {
+          degraded = true;
+          safeCb(callbacks.onError,
+            'An Anthropic API key is needed for the live AI patient. Add it to run the scenario.',
+            true);
+        }
+        return Promise.resolve(scriptedTurn(command, advance));
+      }
+
+      return callClaude(command, advance)
+        .then(function (data) {
+          var turn = parseTurnResponse(data);
+          return applyModelTurn(turn, command, advance);
+        })
+        .then(null, function (err) {
+          var msg = (err && err.isPatientLoopApiError)
+            ? err.message
+            : 'Something went wrong talking to the AI patient.';
+          degrade(msg, err && err.requestId);
+          // The nurse's command has not been applied yet — replay it scripted.
+          return scriptedTurn(command, advance);
+        });
+    },
+
+    tickTime: function (seconds) {
+      if (!gameState || ended) return gameState ? cloneState() : null;
+      var s = (typeof seconds === 'number' && isFinite(seconds) && seconds > 0) ? Math.round(seconds) : 0;
+      if (!s) return cloneState();
+      // "Do nothing -> deteriorate": deterministic untreated/treated progression,
+      // no network call — identical behavior in live and degraded modes. The
+      // model stays consistent because the full updated state is resent to it
+      // on the next sendCommand turn.
+      return scriptedTurn(null, s);
+    },
+
+    getState: function () { return gameState ? cloneState() : null; },
+
+    getTranscript: function () { return transcript.slice(); },
+
+    hasKey: hasKey,
+    setKey: setKey,
+    getKeyStoreName: function () { return KEY_STORE_NAME; }
+  };
+
+  window.PatientLoop = PatientLoop;
+})();
+</script>
+<script>
+/* =========================================================================
+   vitals-monitor.js — floating holographic patient-vitals monitor
+   Matches the host "hologram" aesthetic: glass panel, scanlines, corner
+   brackets, additive soft glow. No post-processing (Quest 72fps budget).
+
+   Usage (host owns renderer/camera/scene/animation loop):
+     const mon = window.makeVitalsMonitor(THREE, scene, {
+       position:{x:1.55,y:1.5,z:-0.4},
+       normalRanges: { ... },        // optional overrides
+       faceTarget: camera            // optional THREE.Object3D
+     });
+     // per frame: mon.update({hr,sbp,dbp,spo2,rr,tempC}, nowSeconds);
+     // mon.setAlarm(true|false); mon.dispose();
+
+   Perf contract:
+     - numbers texture: redrawn ONLY when a displayed value / blink / alarm
+       state changes (cached key compare).
+     - ECG texture: small (512x128), its OWN canvas, redrawn every frame
+       from a rolling sample buffer. Everything else is static.
+   ========================================================================= */
+(function () {
+  'use strict';
+
+  window.makeVitalsMonitor = function (THREE, scene, opts) {
+    opts = opts || {};
+
+    // ------------------------------------------------------------ palette
+    var CY = 0x00e5ff, CYs = '#00e5ff', AMBER = '#ffb020', RED = '#ff3b3b';
+    var CY_DIM = 'rgba(0,229,255,0.55)';
+
+    // ---------------------------------------------------- house glow style
+    // additive soft radial sprite material — "bloom without a bloom pass"
+    function softGlowMat(color, opacity) {
+      var c = document.createElement('canvas'); c.width = c.height = 128;
+      var ctx = c.getContext('2d');
+      var g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      var col = new THREE.Color(color);
+      g.addColorStop(0, 'rgba(' + (col.r * 255 | 0) + ',' + (col.g * 255 | 0) + ',' + (col.b * 255 | 0) + ',1)');
+      g.addColorStop(1, 'rgba(' + (col.r * 255 | 0) + ',' + (col.g * 255 | 0) + ',' + (col.b * 255 | 0) + ',0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+      var tex = new THREE.CanvasTexture(c);
+      return new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, opacity: opacity,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+      });
+    }
+
+    // ------------------------------------------------------------- ranges
+    // in [okLow, okHigh] -> cyan; else in [warnLow, warnHigh] -> amber; else red
+    var DEFAULT_RANGES = {
+      hr:   { okLow: 50,   okHigh: 120,  warnLow: 40,  warnHigh: 140 },
+      sbp:  { okLow: 100,  okHigh: 160,  warnLow: 90,  warnHigh: 180 },
+      dbp:  { okLow: 55,   okHigh: 95,   warnLow: 45,  warnHigh: 110 },
+      spo2: { okLow: 94,   okHigh: 100,  warnLow: 90,  warnHigh: 100 },
+      rr:   { okLow: 10,   okHigh: 24,   warnLow: 8,   warnHigh: 30  },
+      tempC:{ okLow: 36.0, okHigh: 38.0, warnLow: 35.0, warnHigh: 39.5 }
+    };
+    var ranges = {};
+    (function mergeRanges() {
+      var user = opts.normalRanges || {};
+      for (var k in DEFAULT_RANGES) {
+        ranges[k] = {};
+        for (var f in DEFAULT_RANGES[k]) {
+          ranges[k][f] = (user[k] && user[k][f] !== undefined) ? user[k][f] : DEFAULT_RANGES[k][f];
+        }
+      }
+    })();
+
+    function vitalColor(key, v) {
+      var r = ranges[key];
+      if (!r || v === undefined || v === null || isNaN(v)) return CY_DIM;
+      if (v >= r.okLow && v <= r.okHigh) return CYs;
+      if (v >= r.warnLow && v <= r.warnHigh) return AMBER;
+      return RED;
+    }
+    // worse of two colors (for BP = sys/dia pair)
+    function worseColor(a, b) {
+      var rank = {}; rank[RED] = 3; rank[AMBER] = 2; rank[CYs] = 1; rank[CY_DIM] = 0;
+      return (rank[a] >= rank[b]) ? a : b;
+    }
+
+    // ------------------------------------------------------------- group
+    var group = new THREE.Group();
+    group.name = 'vitalsMonitor';
+    var basePos = opts.position || { x: 1.55, y: 1.5, z: -0.4 };
+    group.position.set(basePos.x, basePos.y, basePos.z);
+    scene.add(group);
+
+    var PANEL_W = 0.9, PANEL_H = 0.62;
+
+    // --------------------------------------------- numbers (panel) canvas
+    var NW = 1024, NH = 704; // ~ PANEL_W / PANEL_H aspect
+    var numCanvas = document.createElement('canvas');
+    numCanvas.width = NW; numCanvas.height = NH;
+    var nctx = numCanvas.getContext('2d');
+    var numTex = new THREE.CanvasTexture(numCanvas);
+    numTex.colorSpace = THREE.SRGBColorSpace;
+    numTex.minFilter = THREE.LinearFilter;
+    numTex.magFilter = THREE.LinearFilter;
+    numTex.generateMipmaps = false;
+
+    var panelMat = new THREE.MeshBasicMaterial({
+      map: numTex, transparent: true, side: THREE.DoubleSide,
+      fog: false, depthWrite: false
+    });
+    var panel = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_W, PANEL_H), panelMat);
+    panel.renderOrder = 2;
+    group.add(panel);
+
+    function roundRectPath(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+      ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+      ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+      ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+      ctx.closePath();
+    }
+
+    // draws glass panel chrome + all readouts. Called ONLY on value change.
+    function drawNumbers(state) {
+      var W = NW, H = NH;
+      nctx.clearRect(0, 0, W, H);
+      var borderCol = state.alarm ? RED : CYs;
+
+      // glass fill
+      roundRectPath(nctx, 4, 4, W - 8, H - 8, 22);
+      nctx.fillStyle = 'rgba(6,24,38,0.78)';
+      nctx.fill();
+
+      // cyan scanlines every 6px at ~0.06 alpha
+      nctx.save();
+      nctx.clip(); // clip scanlines to the rounded rect (path still current)
+      nctx.fillStyle = 'rgba(0,229,255,0.06)';
+      for (var sy = 6; sy < H; sy += 6) nctx.fillRect(4, sy, W - 8, 1);
+      nctx.restore();
+
+      // 2.5px rounded border
+      roundRectPath(nctx, 4, 4, W - 8, H - 8, 22);
+      nctx.strokeStyle = borderCol;
+      nctx.lineWidth = 2.5;
+      nctx.stroke();
+
+      // 5px corner brackets
+      nctx.strokeStyle = borderCol;
+      nctx.lineWidth = 5;
+      var L = 30, m = 6;
+      nctx.beginPath();
+      nctx.moveTo(m, m + L); nctx.lineTo(m, m); nctx.lineTo(m + L, m);                       // TL
+      nctx.moveTo(W - m - L, m); nctx.lineTo(W - m, m); nctx.lineTo(W - m, m + L);           // TR
+      nctx.moveTo(W - m, H - m - L); nctx.lineTo(W - m, H - m); nctx.lineTo(W - m - L, H - m); // BR
+      nctx.moveTo(m + L, H - m); nctx.lineTo(m, H - m); nctx.lineTo(m, H - m - L);           // BL
+      nctx.stroke();
+
+      // header
+      nctx.textBaseline = 'middle';
+      nctx.font = 'bold 34px monospace';
+      nctx.textAlign = 'left';
+      nctx.fillStyle = CYs;
+      nctx.fillText('PATIENT MONITOR', 44, 68);
+      nctx.textAlign = 'right';
+      nctx.fillStyle = state.blinkOn ? CYs : 'rgba(0,229,255,0.18)';
+      nctx.font = 'bold 30px monospace';
+      nctx.fillText('● LIVE', W - 44, 68);
+
+      // header divider
+      nctx.strokeStyle = 'rgba(0,229,255,0.35)';
+      nctx.lineWidth = 2;
+      nctx.beginPath(); nctx.moveTo(40, 100); nctx.lineTo(W - 40, 100); nctx.stroke();
+
+      // readouts: 2-col grid, 3 rows (Temp spans row 3 col 0)
+      var cells = [
+        { label: 'HR (bpm)',      text: state.hrTxt,   color: state.hrCol,   col: 0, row: 0 },
+        { label: 'SpO₂ (%)', text: state.spo2Txt, color: state.spo2Col, col: 1, row: 0 },
+        { label: 'BP (mmHg)',     text: state.bpTxt,   color: state.bpCol,   col: 0, row: 1 },
+        { label: 'RR (/min)',     text: state.rrTxt,   color: state.rrCol,   col: 1, row: 1 },
+        { label: 'TEMP (°C)',text: state.tmpTxt,  color: state.tmpCol,  col: 0, row: 2 }
+      ];
+      var gridTop = 122, rowH = 108, colW = (W - 88) / 2;
+      nctx.textAlign = 'left';
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i];
+        var x = 44 + c.col * colW;
+        var y = gridTop + c.row * rowH;
+        nctx.font = '22px monospace';
+        nctx.fillStyle = CY_DIM;
+        nctx.fillText(c.label, x, y + 14);
+        nctx.font = 'bold 62px monospace';
+        nctx.fillStyle = c.color;
+        nctx.fillText(c.text, x, y + 66);
+      }
+
+      // ECG strip label (lane itself is a separate per-frame texture/plane),
+      // sits just above the lane, clear of the TEMP readout
+      nctx.font = '20px monospace';
+      nctx.fillStyle = CY_DIM;
+      nctx.fillText('ECG — LEAD II', 44, 482);
+
+      numTex.needsUpdate = true;
+    }
+
+    // --------------------------------------------------------- ECG strip
+    // its own small canvas/texture — the ONLY per-frame texture upload
+    var EW = 512, EH = 128;
+    var ecgCanvas = document.createElement('canvas');
+    ecgCanvas.width = EW; ecgCanvas.height = EH;
+    var ectx = ecgCanvas.getContext('2d');
+    var ecgTex = new THREE.CanvasTexture(ecgCanvas);
+    ecgTex.colorSpace = THREE.SRGBColorSpace;
+    ecgTex.minFilter = THREE.LinearFilter;
+    ecgTex.magFilter = THREE.LinearFilter;
+    ecgTex.generateMipmaps = false;
+
+    var ecgMat = new THREE.MeshBasicMaterial({
+      map: ecgTex, transparent: true, side: THREE.DoubleSide,
+      fog: false, depthWrite: false
+    });
+    var ecgPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.155), ecgMat);
+    ecgPlane.position.set(0, -0.205, 0.003); // bottom third of the panel
+    ecgPlane.renderOrder = 3;
+    group.add(ecgPlane);
+
+    // rolling sample buffer
+    var N_SAMPLES = 256;
+    var samples = new Float32Array(N_SAMPLES); // baseline 0
+    var writeIdx = 0;
+    var beatPhase = 0;               // 0..1, one heartbeat per cycle
+    var SAMPLES_PER_SEC = 110;       // scroll speed
+    var sampleAcc = 0;
+
+    // PQRST-ish trace: sum of gaussian bumps over beat phase
+    function pqrst(p) {
+      function g(c, w, a) { var d = p - c; return a * Math.exp(-(d * d) / (2 * w * w)); }
+      return g(0.16, 0.030, 0.14)   // P
+           + g(0.30, 0.008, -0.10)  // Q
+           + g(0.33, 0.012, 0.90)   // R
+           + g(0.36, 0.009, -0.20)  // S
+           + g(0.55, 0.045, 0.24);  // T
+    }
+
+    function stepEcg(dt, hr) {
+      if (!(hr > 0)) hr = 0; // flatline if no HR
+      sampleAcc += dt * SAMPLES_PER_SEC;
+      var n = sampleAcc | 0;
+      if (n > N_SAMPLES) n = N_SAMPLES; // don't spiral after a long pause
+      sampleAcc -= n;
+      var phasePerSample = (hr / 60) / SAMPLES_PER_SEC; // beats advance with HR
+      for (var i = 0; i < n; i++) {
+        beatPhase += phasePerSample;
+        if (beatPhase >= 1) beatPhase -= 1;
+        samples[writeIdx] = hr > 0 ? pqrst(beatPhase) : 0;
+        writeIdx = (writeIdx + 1) % N_SAMPLES;
+      }
+    }
+
+    function drawEcg(alarm) {
+      // dark lane
+      ectx.fillStyle = alarm ? 'rgba(38,6,10,0.92)' : 'rgba(2,12,20,0.92)';
+      ectx.fillRect(0, 0, EW, EH);
+      // faint grid
+      ectx.strokeStyle = alarm ? 'rgba(255,59,59,0.12)' : 'rgba(0,229,255,0.10)';
+      ectx.lineWidth = 1;
+      ectx.beginPath();
+      for (var gx = 32; gx < EW; gx += 32) { ectx.moveTo(gx, 0); ectx.lineTo(gx, EH); }
+      for (var gy = 32; gy < EH; gy += 32) { ectx.moveTo(0, gy); ectx.lineTo(EW, gy); }
+      ectx.stroke();
+      // trace (oldest sample at left edge)
+      var baseY = EH * 0.68, amp = EH * 0.55;
+      ectx.strokeStyle = alarm ? RED : CYs;
+      ectx.lineWidth = 2;
+      ectx.beginPath();
+      for (var i = 0; i < N_SAMPLES; i++) {
+        var s = samples[(writeIdx + i) % N_SAMPLES];
+        var x = (i / (N_SAMPLES - 1)) * EW;
+        var y = baseY - s * amp;
+        if (i === 0) ectx.moveTo(x, y); else ectx.lineTo(x, y);
+      }
+      ectx.stroke();
+      ecgTex.needsUpdate = true;
+    }
+
+    // ---------------------------------------------------------- back glow
+    var glowCy = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_W * 1.35, PANEL_H * 1.45), softGlowMat(CY, 0.35));
+    glowCy.position.z = -0.012;
+    glowCy.renderOrder = 1;
+    group.add(glowCy);
+
+    var glowRedMat = softGlowMat(0xff3b3b, 0.0); // pulsed only while alarming
+    var glowRed = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_W * 1.4, PANEL_H * 1.5), glowRedMat);
+    glowRed.position.z = -0.011;
+    glowRed.renderOrder = 1;
+    glowRed.visible = false;
+    group.add(glowRed);
+
+    // ------------------------------------- support beam + emitter dot base
+    var beamMat = new THREE.MeshBasicMaterial({
+      color: CY, transparent: true, opacity: 0.45,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+    });
+    var beam = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 0.28, 6, 1, true), beamMat);
+    beam.position.y = -(PANEL_H / 2) - 0.14;
+    group.add(beam);
+
+    var emitter = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.09), softGlowMat(CY, 0.8));
+    emitter.rotation.x = -Math.PI / 2; // flat, facing up
+    emitter.position.y = -(PANEL_H / 2) - 0.28;
+    group.add(emitter);
+
+    // -------------------------------------------------------------- state
+    var alarm = false;
+    var lastNow = null;
+    var lastKey = '';
+    var disposed = false;
+    var tmpVec = new THREE.Vector3();
+
+    function fmt(v, dp) {
+      if (v === undefined || v === null || isNaN(v)) return '--';
+      return dp ? Number(v).toFixed(dp) : String(Math.round(v));
+    }
+
+    // initial paint so the panel isn't blank before the first update
+    drawNumbers({
+      alarm: false, blinkOn: true,
+      hrTxt: '--', hrCol: CY_DIM, spo2Txt: '--', spo2Col: CY_DIM,
+      bpTxt: '--/--', bpCol: CY_DIM, rrTxt: '--', rrCol: CY_DIM,
+      tmpTxt: '--', tmpCol: CY_DIM
+    });
+    drawEcg(false);
+
+    // ---------------------------------------------------------------- API
+    var monitor = {
+      group: group,
+
+      update: function (vitals, now) {
+        if (disposed) return;
+        vitals = vitals || {};
+        now = now || 0;
+        var dt = (lastNow === null) ? 0.016 : (now - lastNow);
+        if (dt < 0) dt = 0; if (dt > 0.1) dt = 0.1;
+        lastNow = now;
+
+        // ---- orientation: face target, stay upright
+        if (opts.faceTarget && opts.faceTarget.getWorldPosition) {
+          opts.faceTarget.getWorldPosition(tmpVec);
+          tmpVec.y = group.position.y; // keep readable, never tilted/upside down
+          group.lookAt(tmpVec);
+        } else {
+          tmpVec.set(0, group.position.y, 0);
+          group.lookAt(tmpVec);
+        }
+
+        // ---- gentle holographic bob
+        group.position.y = basePos.y + Math.sin(now * 1.1) * 0.012;
+
+        // ---- numbers texture: redraw ONLY when displayed state changes
+        var blinkOn = (Math.floor(now * 2) % 2) === 0;
+        var hrTxt = fmt(vitals.hr), rrTxt = fmt(vitals.rr),
+            spo2Txt = fmt(vitals.spo2), tmpTxt = fmt(vitals.tempC, 1),
+            bpTxt = fmt(vitals.sbp) + '/' + fmt(vitals.dbp);
+        var key = [hrTxt, bpTxt, spo2Txt, rrTxt, tmpTxt, blinkOn ? 1 : 0, alarm ? 1 : 0].join('|');
+        if (key !== lastKey) {
+          lastKey = key;
+          drawNumbers({
+            alarm: alarm, blinkOn: blinkOn,
+            hrTxt: hrTxt,   hrCol: vitalColor('hr', vitals.hr),
+            spo2Txt: spo2Txt, spo2Col: vitalColor('spo2', vitals.spo2),
+            bpTxt: bpTxt,
+            bpCol: worseColor(vitalColor('sbp', vitals.sbp), vitalColor('dbp', vitals.dbp)),
+            rrTxt: rrTxt,   rrCol: vitalColor('rr', vitals.rr),
+            tmpTxt: tmpTxt, tmpCol: vitalColor('tempC', vitals.tempC)
+          });
+        }
+
+        // ---- ECG: per-frame scroll on its OWN small texture
+        stepEcg(dt, vitals.hr);
+        drawEcg(alarm);
+
+        // ---- alarm pulse: material opacity only (no texture upload)
+        if (alarm) {
+          glowRed.visible = true;
+          glowRedMat.opacity = 0.28 + 0.24 * Math.sin(now * 6.0);
+          glowCy.material.opacity = 0.12;
+        } else {
+          glowRed.visible = false;
+          glowRedMat.opacity = 0;
+          glowCy.material.opacity = 0.35;
+        }
+      },
+
+      setAlarm: function (on) {
+        on = !!on;
+        if (on === alarm) return;
+        alarm = on;
+        lastKey = ''; // force a numbers redraw so the border recolors
+        if (!on) { glowRed.visible = false; glowRedMat.opacity = 0; }
+      },
+
+      dispose: function () {
+        if (disposed) return;
+        disposed = true;
+        scene.remove(group);
+        group.traverse(function (obj) {
+          if (obj.isMesh) {
+            if (obj.geometry) obj.geometry.dispose();
+            var mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (var i = 0; i < mats.length; i++) {
+              if (!mats[i]) continue;
+              if (mats[i].map) mats[i].map.dispose();
+              mats[i].dispose();
+            }
+          }
+        });
+      }
+    };
+
+    return monitor;
+  };
+})();
+</script>
+<script>
+/* =====================================================================
+   NURSE VR HUB — Step 2 UI layer  (DOM overlays over the WebXR scene)
+   ---------------------------------------------------------------------
+   On-screen controller that turns a launched scenario into a playable
+   case. Owns NO clinical data and NO 3D — it drives the public contracts
+   of the three build modules and bridges to the 3D scene via CustomEvents:
+     - window.ANAPHYLAXIS_SCENARIO   (clinical data)
+     - window.PatientLoop            (AI patient game loop)
+     - the hub's makeVitalsMonitor hook, via 'sim-vitals-*' events
+
+   Contract facts this file is written against (verified in the modules):
+     - Turn state fed to onTurn / returned by start()/tickTime() carries:
+       { patientDialogue, vitals:{hr,sbp,dbp,spo2,rr,tempC}, visibleCues[],
+         critical, timeElapsedSeconds, lastAssessment, epinephrineGiven,
+         epinephrineGivenAtSeconds, ... }.  (Vitals live on .vitals.)
+     - sendCommand() and tickTime() BOTH fire callbacks.onTurn themselves,
+       so this file never re-renders their return value.
+     - endScenario() fires callbacks.onEnd exactly once with:
+       { outcome:'arrest'|'stabilized', hiddenCondition, timeElapsedSeconds,
+         interventionsTaken[], epinephrineGiven, epinephrineGivenAtSeconds,
+         finalVitals, degraded, transcript:[{role:'nurse'|'patient'|'assessment', text}] }.
+       We route ALL endings through finish() with a `reported` guard so the
+       report can never double-fire.
+   Key handling: sessionStorage only, name shared with the sepsis trainer
+   ('nurse-sim-anthropic-key'); never localStorage, never logged, never
+   in any export.
+   ===================================================================== */
+(function () {
+  'use strict';
+
+  var SCN = null;                 // resolved scenario object
+  var started = false;            // a case is live
+  var reported = false;           // the report has fired for the current case
+  var busy = false;               // an async AI turn is in flight
+  var CY = '#00e5ff', AMBER = '#ffb020', RED = '#ff3b3b', GREEN = '#7fffd0';
+  var KEY_STORE = 'nurse-sim-anthropic-key';
+
+  var hud, logBox, clockEl, statusChip;   // live-HUD element handles
+
+  // ---- tiny DOM helpers ---------------------------------------------------
+  function el(tag, css, txt) {
+    var d = document.createElement(tag);
+    if (css) d.style.cssText = css;
+    if (txt != null) d.textContent = txt;
+    return d;
+  }
+  function root() {
+    var r = document.getElementById('demo-ui');
+    if (!r) {
+      r = el('div', 'position:fixed;inset:0;z-index:500;pointer-events:none;' +
+        'font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#dff6ff;');
+      r.id = 'demo-ui';
+      document.body.appendChild(r);
+    }
+    return r;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function glass(css) {
+    return el('div', 'pointer-events:auto;background:rgba(6,20,32,0.94);' +
+      'border:1.5px solid rgba(0,229,255,0.55);border-radius:14px;' +
+      'box-shadow:0 0 40px rgba(0,229,255,0.18),inset 0 0 30px rgba(0,229,255,0.05);' +
+      'backdrop-filter:blur(3px);' + (css || ''));
+  }
+  function btn(label, primary) {
+    var b = el('button', 'pointer-events:auto;cursor:pointer;font:600 15px sans-serif;' +
+      'padding:11px 22px;border-radius:10px;border:1.5px solid ' + CY + ';' +
+      (primary ? 'background:' + CY + ';color:#03121a;' : 'background:transparent;color:' + CY + ';') +
+      'letter-spacing:.3px;', label);
+    b.onmouseenter = function () { b.style.filter = 'brightness(1.15)'; };
+    b.onmouseleave = function () { b.style.filter = 'none'; };
+    return b;
+  }
+  function fmt(sec) { sec = sec || 0; return Math.floor(sec / 60) + ':' + ('0' + (sec % 60)).slice(-2); }
+
+  // Bridge to the hub's 3D scene (the hub listens for these).
+  function emit(name, detail) { window.dispatchEvent(new CustomEvent(name, { detail: detail })); }
+
+  // =====================================================================
+  // 0. LAUNCH — the hub fires 'launch-scenario' when a panel is selected
+  // =====================================================================
+  window.addEventListener('launch-scenario', function (e) {
+    var panel = e.detail || {};
+    if (panel.id !== 'emerg') {
+      toast('“' + String(panel.title || 'This module').replace('\n', ' ') +
+        '” is coming soon — the Emergency Response case is the live build.');
+      return;
+    }
+    SCN = window.ANAPHYLAXIS_SCENARIO;
+    if (!SCN) { toast('Scenario data failed to load.'); return; }
+    if (started) return;
+    if (!hasKey()) showKeyGate(showBrief); else showBrief();
+  });
+
+  // =====================================================================
+  // 1. API KEY GATE  (only if no key in sessionStorage)
+  // =====================================================================
+  function hasKey() { try { return !!sessionStorage.getItem(KEY_STORE); } catch (e) { return false; } }
+  function setKey(k) { try { k ? sessionStorage.setItem(KEY_STORE, k) : sessionStorage.removeItem(KEY_STORE); } catch (e) {} }
+
+  function showKeyGate(next) {
+    var r = root(); clear(r);
+    var card = glass('position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);' +
+      'width:min(560px,90vw);padding:30px 32px;');
+    card.appendChild(el('div', 'font:700 20px sans-serif;color:' + CY + ';margin-bottom:6px;', 'Live AI patient'));
+    card.appendChild(el('div', 'opacity:.85;margin-bottom:18px;',
+      'The Emergency case is driven by a live AI patient (Anthropic Claude). ' +
+      'Paste an API key to run it — it stays in this tab only (sessionStorage), is never stored ' +
+      'or exported, and calls go straight to api.anthropic.com. You can also skip and play the ' +
+      'scripted offline version.'));
+    var input = el('input', 'pointer-events:auto;width:100%;box-sizing:border-box;padding:12px 14px;' +
+      'border-radius:10px;border:1.5px solid rgba(0,229,255,0.4);background:#031019;color:#dff6ff;' +
+      'font:14px monospace;margin-bottom:18px;');
+    input.type = 'password'; input.placeholder = 'sk-ant-...'; input.autocomplete = 'off';
+    card.appendChild(input);
+    var rowb = el('div', 'display:flex;gap:12px;justify-content:flex-end;');
+    var skip = btn('Play offline', false);
+    skip.onclick = function () { next(); };
+    var go = btn('Use key & begin', true);
+    go.onclick = function () { if (input.value.trim()) setKey(input.value.trim()); next(); };
+    input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go.click(); });
+    rowb.appendChild(skip); rowb.appendChild(go);
+    card.appendChild(rowb);
+    r.appendChild(card); input.focus();
+  }
+
+  // =====================================================================
+  // 2. SBAR PRE-CASE BRIEFING
+  // =====================================================================
+  function showBrief() {
+    var r = root(); clear(r);
+    var s = SCN.sbar || {};
+    var card = glass('position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);' +
+      'width:min(640px,92vw);max-height:86vh;overflow:auto;padding:28px 32px;');
+    card.appendChild(el('div', 'font:700 12px sans-serif;letter-spacing:2px;color:' + AMBER + ';', 'PRE-CASE HANDOFF'));
+    card.appendChild(el('div', 'font:800 26px sans-serif;color:' + CY + ';margin:2px 0 2px;', SCN.title || 'Emergency'));
+    if (SCN.subtitle) card.appendChild(el('div', 'opacity:.8;margin-bottom:16px;', SCN.subtitle));
+    var p = SCN.patient || {};
+    var who = [p.name, p.age != null ? p.age + 'y' : '', p.sex, p.weightKg != null ? p.weightKg + ' kg' : '']
+      .filter(Boolean).join(' · ');
+    if (who) card.appendChild(row('Patient', who));
+    if (p.allergies) card.appendChild(row('Allergies', p.allergies));
+    if (SCN.handoffScript) {
+      var hs = glass('padding:14px 16px;margin:14px 0;border-color:rgba(255,176,32,0.5);');
+      hs.appendChild(el('div', 'font:700 11px sans-serif;letter-spacing:1.5px;color:' + AMBER + ';margin-bottom:6px;', 'CHARGE NURSE'));
+      hs.appendChild(el('div', 'font-style:italic;opacity:.95;', '“' + SCN.handoffScript + '”'));
+      card.appendChild(hs);
+    }
+    ['situation', 'background', 'assessment', 'recommendation'].forEach(function (k) {
+      if (s[k]) card.appendChild(row(k, s[k], k.toUpperCase()));
+    });
+    card.appendChild(el('div', 'opacity:.7;font-size:13px;margin:14px 0 6px;',
+      'You will assess and act by command. Say WHAT you want to do and WHY — reasoning is scored, ' +
+      'not just the action. The patient responds in real time; the clock only advances when you act ' +
+      'or choose to wait.'));
+    var rowb = el('div', 'display:flex;justify-content:flex-end;margin-top:8px;');
+    var go = btn('Begin scenario', true);
+    go.onclick = beginCase;
+    rowb.appendChild(go); card.appendChild(rowb);
+    r.appendChild(card);
+  }
+  function row(short, text, badge) {
+    var d = el('div', 'display:flex;gap:12px;padding:7px 0;border-top:1px solid rgba(0,229,255,0.12);');
+    var lab = el('div', 'flex:0 0 108px;color:' + CY + ';font-weight:600;font-size:13px;', badge || short);
+    var val = el('div', 'flex:1;opacity:.92;', text);
+    d.appendChild(lab); d.appendChild(val); return d;
+  }
+
+  // =====================================================================
+  // 3. LIVE CASE — command box, dialogue log, sim clock
+  // =====================================================================
+  function beginCase() {
+    started = true; reported = false;
+    PatientLoop.init(SCN, {
+      onTurn: renderTurn,
+      onError: function (msg, degraded) { toast(msg); if (degraded) setChip('SCRIPTED (offline)', AMBER); },
+      onEnd: finish
+    });
+    buildHud();
+    emit('sim-vitals-show', { normalRanges: SCN.normalRanges });   // hub spawns the 3D monitor
+    PatientLoop.start();   // fires onTurn(seed) itself — no manual render
+  }
+
+  function buildHud() {
+    var r = root(); clear(r);
+    // top strip: title + sim clock + status + end
+    var top = glass('position:absolute;left:16px;top:16px;padding:10px 16px;display:flex;' +
+      'gap:16px;align-items:center;');
+    top.appendChild(el('div', 'font:800 16px sans-serif;color:' + CY + ';', SCN.title || 'Emergency'));
+    clockEl = el('div', 'font:700 18px monospace;color:#fff;', '0:00');
+    clockEl.title = 'Scenario time elapsed';
+    top.appendChild(clockEl);
+    statusChip = el('div', 'font:700 11px sans-serif;letter-spacing:1px;padding:4px 10px;border-radius:20px;' +
+      'background:rgba(0,229,255,0.15);color:' + CY + ';', 'LIVE AI');
+    if (!hasKey()) {
+      statusChip.textContent = 'SCRIPTED (offline)'; statusChip.style.color = AMBER;
+      statusChip.style.background = 'rgba(255,176,32,0.15)';
+    }
+    top.appendChild(statusChip);
+    var endb = btn('End & debrief', false);
+    endb.style.padding = '6px 14px'; endb.style.fontSize = '13px';
+    endb.onclick = function () { endCase('ended'); };
+    top.appendChild(endb);
+    r.appendChild(top);
+
+    // dialogue / event log (right column)
+    var side = glass('position:absolute;right:16px;top:16px;bottom:150px;width:min(360px,42vw);' +
+      'padding:14px 16px;overflow:auto;');
+    side.appendChild(el('div', 'font:700 11px sans-serif;letter-spacing:1.5px;color:' + CY + ';margin-bottom:8px;', 'PATIENT'));
+    logBox = el('div', ''); side.appendChild(logBox); r.appendChild(side);
+
+    // command bar (bottom)
+    var bar = glass('position:absolute;left:50%;bottom:20px;transform:translateX(-50%);' +
+      'width:min(760px,94vw);padding:12px 14px;display:flex;gap:10px;align-items:center;');
+    var input = el('input', 'pointer-events:auto;flex:1;padding:13px 16px;border-radius:10px;' +
+      'border:1.5px solid rgba(0,229,255,0.4);background:#031019;color:#dff6ff;font:15px sans-serif;');
+    input.id = 'cmd-input';
+    input.placeholder = 'e.g. “Give 0.5 mg IM epinephrine because this is anaphylaxis and BP is dropping”';
+    input.autocomplete = 'off';
+    var send = btn('Act', true);
+    function fire() {
+      var v = input.value.trim(); if (!v || busy) return;
+      input.value = ''; submitCommand(v);
+    }
+    input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') fire(); });
+    send.onclick = fire;
+    var wait = btn('⏱ Wait 30s', false);
+    wait.style.padding = '13px 14px'; wait.title = 'Advance the clock without acting — the patient keeps deteriorating';
+    wait.onclick = function () { if (busy || !started) return; PatientLoop.tickTime(30); };  // fires onTurn itself
+    var mic = btn('🎤', false); mic.title = 'Voice (uses the scene voice agent)';
+    mic.onclick = function () { emit('sim-voice-toggle', {}); };
+    bar.appendChild(mic); bar.appendChild(input); bar.appendChild(wait); bar.appendChild(send);
+    hud = bar; r.appendChild(bar); input.focus();
+  }
+
+  function submitCommand(text) {
+    busy = true; setChip(hasKey() ? 'PATIENT RESPONDING…' : 'SCRIPTED', hasKey() ? CY : AMBER);
+    appendLog('you', text);
+    Promise.resolve(PatientLoop.sendCommand(text)).then(function () {
+      busy = false; if (started) setChip(hasKey() ? 'LIVE AI' : 'SCRIPTED (offline)', hasKey() ? CY : AMBER);
+    }).catch(function () { busy = false; });
+  }
+
+  // onTurn handler — the loop fires this for the seed, every command, and every wait.
+  function renderTurn(st) {
+    if (!st) return;
+    if (typeof st.timeElapsedSeconds === 'number') setClock(st.timeElapsedSeconds);
+    if (st.patientDialogue) appendLog('patient', st.patientDialogue);
+    if (st.lastAssessment) appendLog('assess', st.lastAssessment);
+    if (st.visibleCues && st.visibleCues.length) appendLog('cue', 'You observe: ' + st.visibleCues.join(', ') + '.');
+    if (st.vitals) emit('sim-vitals-update', { vitals: st.vitals, critical: !!st.critical });
+    // Scenario end is driven solely by the loop's onEnd -> finish(); never here.
+  }
+
+  function appendLog(kind, text) {
+    if (!logBox) return;
+    var wrap = el('div', 'margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.06);');
+    var tag = {
+      you: ['YOU', CY], patient: ['PATIENT', '#fff'],
+      cue: ['OBSERVED', AMBER], assess: ['CLINICAL NOTE', GREEN]
+    }[kind] || ['', '#fff'];
+    wrap.appendChild(el('div', 'font:700 10px sans-serif;letter-spacing:1px;color:' + tag[1] + ';margin-bottom:2px;', tag[0]));
+    var body = (kind === 'patient') ? '#eafcff' : '#cfe9f5';
+    wrap.appendChild(el('div', 'color:' + body + ';' +
+      ((kind === 'cue' || kind === 'assess') ? 'font-style:italic;opacity:.9;' : ''), text));
+    logBox.appendChild(wrap);
+    if (logBox.parentNode) logBox.parentNode.scrollTop = logBox.parentNode.scrollHeight;
+  }
+
+  function setChip(txt, color) {
+    if (!statusChip) return; statusChip.textContent = txt; statusChip.style.color = color;
+    statusChip.style.background = (color === AMBER ? 'rgba(255,176,32,0.15)' : 'rgba(0,229,255,0.15)');
+  }
+  function setClock(sec) { if (clockEl) clockEl.textContent = fmt(sec); }
+
+  // Manual "End & debrief" — synthesize the loop's onEnd summary from state.
+  function endCase(reason) {
+    if (!started || reported) return;
+    var st = PatientLoop.getState ? PatientLoop.getState() : null;
+    finish({
+      outcome: reason || 'ended',
+      hiddenCondition: SCN.hiddenCondition,
+      timeElapsedSeconds: st ? st.timeElapsedSeconds : 0,
+      epinephrineGiven: st ? st.epinephrineGiven : false,
+      epinephrineGivenAtSeconds: st ? st.epinephrineGivenAtSeconds : null,
+      finalVitals: st ? st.vitals : null,
+      transcript: PatientLoop.getTranscript ? PatientLoop.getTranscript() : []
+    });
+  }
+
+  // The single end path — guarded so the report can never double-fire.
+  function finish(summary) {
+    if (reported) return;
+    reported = true; started = false; busy = false;
+    emit('sim-vitals-hide', {});
+    showReport(summary || {});
+  }
+
+  // =====================================================================
+  // 4. AFTER-ACTION REPORT
+  // =====================================================================
+  function showReport(summary) {
+    var r = root(); clear(r);
+    var card = glass('position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);' +
+      'width:min(680px,94vw);max-height:88vh;overflow:auto;padding:28px 32px;');
+    card.appendChild(el('div', 'font:700 12px sans-serif;letter-spacing:2px;color:' + AMBER + ';', 'AFTER-ACTION REPORT'));
+    card.appendChild(el('div', 'font:800 24px sans-serif;color:' + CY + ';margin:2px 0 4px;', SCN.title || 'Emergency'));
+
+    var verdict = { arrest: ['PATIENT ARRESTED', RED], stabilized: ['PATIENT STABILIZED', GREEN] }[summary.outcome]
+      || ['SCENARIO ENDED', CY];
+    card.appendChild(el('div', 'font:700 16px sans-serif;color:' + verdict[1] + ';margin-bottom:2px;', verdict[0]));
+    card.appendChild(el('div', 'opacity:.8;margin-bottom:16px;', 'Scenario time: ' + fmt(summary.timeElapsedSeconds)));
+
+    // reveal the hidden diagnosis
+    if (summary.hiddenCondition || SCN.hiddenCondition) {
+      var hc = glass('padding:12px 15px;margin-bottom:16px;');
+      hc.appendChild(el('div', 'font:700 11px sans-serif;letter-spacing:1px;color:' + AMBER + ';margin-bottom:4px;', 'TRUE DIAGNOSIS (was hidden)'));
+      hc.appendChild(el('div', '', summary.hiddenCondition || SCN.hiddenCondition));
+      card.appendChild(hc);
+    }
+
+    // key-action assessment: time-to-epinephrine vs the guideline-grounded target
+    card.appendChild(el('div', 'font:700 12px sans-serif;letter-spacing:1px;color:' + CY + ';margin:6px 0 8px;', 'KEY ACTION — EPINEPHRINE'));
+    var rub = SCN.scoringRubric || {};
+    var target = typeof rub.timeToEpinephrineTargetSeconds === 'number' ? rub.timeToEpinephrineTargetSeconds : 60;
+    var line, col;
+    if (summary.epinephrineGiven && summary.epinephrineGivenAtSeconds != null) {
+      var at = summary.epinephrineGivenAtSeconds;
+      if (at <= target) { line = 'IM epinephrine given at ' + fmt(at) + ' — within the ' + target + 's target. ✓'; col = GREEN; }
+      else if (at <= 240) { line = 'IM epinephrine given at ' + fmt(at) + ' — later than the ' + target + 's target.'; col = AMBER; }
+      else { line = 'IM epinephrine delayed to ' + fmt(at) + ' — past the 4-minute hard-fail threshold.'; col = RED; }
+    } else {
+      line = 'IM epinephrine was never given — the definitive treatment for anaphylaxis was missed.'; col = RED;
+    }
+    card.appendChild(el('div', 'color:' + col + ';margin-bottom:14px;', line));
+
+    // transcript (nurse / patient / assessment)
+    var tr = summary.transcript || [];
+    if (tr.length) {
+      card.appendChild(el('div', 'font:700 12px sans-serif;letter-spacing:1px;color:' + CY + ';margin:6px 0 8px;', 'WHAT HAPPENED'));
+      tr.forEach(function (m) {
+        var role = m.role, txt = m.text || '';
+        var lab, lcol, italic = false;
+        if (role === 'nurse') { lab = 'You: '; lcol = CY; }
+        else if (role === 'patient') { lab = 'Patient: '; lcol = '#eafcff'; }
+        else { lab = 'Clinical note: '; lcol = GREEN; italic = true; }
+        var line2 = el('div', 'margin-bottom:7px;' + (italic ? 'font-style:italic;opacity:.85;' : ''));
+        line2.appendChild(el('span', 'color:' + lcol + ';font-weight:600;', lab));
+        line2.appendChild(el('span', 'opacity:.92;', txt));
+        card.appendChild(line2);
+      });
+    }
+
+    if (summary.finalVitals) {
+      var v = summary.finalVitals;
+      card.appendChild(el('div', 'font:700 12px sans-serif;letter-spacing:1px;color:' + CY + ';margin:14px 0 6px;', 'FINAL VITALS'));
+      card.appendChild(el('div', 'font:14px monospace;opacity:.9;',
+        'HR ' + v.hr + '  BP ' + v.sbp + '/' + v.dbp + '  SpO₂ ' + v.spo2 + '%  RR ' + v.rr + '  T ' + v.tempC + '°C'));
+    }
+
+    card.appendChild(el('div', 'opacity:.6;font-size:12px;margin-top:16px;',
+      'Draft — clinical content pending review by a licensed educator.'));
+    var rowb = el('div', 'display:flex;gap:12px;justify-content:flex-end;margin-top:14px;');
+    var again = btn('Run again', false);
+    again.onclick = function () { clear(root()); if (!hasKey()) showKeyGate(showBrief); else showBrief(); };
+    var done = btn('Back to hub', true);
+    done.onclick = function () { clear(root()); };
+    rowb.appendChild(again); rowb.appendChild(done); card.appendChild(rowb);
+    r.appendChild(card);
+  }
+
+  // ---- transient toast ----------------------------------------------------
+  function toast(msg) {
+    var r = root();
+    var t = glass('position:absolute;left:50%;top:24px;transform:translateX(-50%);padding:12px 20px;' +
+      'max-width:80vw;text-align:center;');
+    t.textContent = msg; r.appendChild(t);
+    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 4200);
+  }
+})();
 </script>
 </body></html>
