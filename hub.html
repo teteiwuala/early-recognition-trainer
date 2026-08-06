@@ -1486,6 +1486,13 @@ if (typeof window !== 'undefined') {
         effort: 'low',
         format: { type: 'json_schema', schema: TURN_SCHEMA }
       },
+      // Server-side refusal fallback (Claude API only, which browser-direct is).
+      // 'default' routes by refusal category (e.g. cyber -> claude-opus-4-8); the
+      // fallback model runs the SAME request, so it must also accept this body —
+      // disabled thinking + effort:low + json_schema are all valid on the fallback.
+      // Requires the paired beta header below. If the whole chain still refuses,
+      // stop_reason==='refusal' and we degrade to the offline scripted engine.
+      fallbacks: 'default',
       system: buildSystemPrompt(),
       messages: [{ role: 'user', content: buildUserMessage(commandText, advanceSeconds) }]
     };
@@ -1496,7 +1503,10 @@ if (typeof window !== 'undefined') {
         'content-type': 'application/json',
         'x-api-key': getKey(),
         'anthropic-version': API_VERSION,
-        'anthropic-dangerous-direct-browser-access': 'true'
+        'anthropic-dangerous-direct-browser-access': 'true',
+        // Gates the scalar `fallbacks: 'default'` form. (The array form uses the
+        // older -2026-06-01 header; pairing either header with the other 400s.)
+        'anthropic-beta': 'server-side-fallback-2026-07-01'
       },
       body: JSON.stringify(body),
       signal: controller ? controller.signal : undefined
@@ -1534,9 +1544,20 @@ if (typeof window !== 'undefined') {
   }
 
   function parseTurnResponse(data) {
+    // With server-side fallbacks, stop_reason 'refusal' here means the WHOLE
+    // chain (claude-opus-5 + its fallback) declined — degrade to scripted.
     if (data && data.stop_reason === 'refusal') {
       throw makeApiError('The AI declined to role-play this turn.', data.__requestId);
     }
+    // Observability only (not user-facing): note when a fallback model served
+    // the turn. A leading `fallback` content block is ignored by the text scan
+    // below since it is not type 'text'.
+    try {
+      var iters = (data && data.usage && data.usage.iterations) || [];
+      if (isArr(iters) && iters.some(function (it) { return it && it.type === 'fallback_message'; }) && data.model) {
+        console.info('[PatientLoop] turn served by fallback model: ' + data.model);
+      }
+    } catch (e) { /* observability only */ }
     var text = null;
     var content = (data && data.content) || [];
     for (var i = 0; i < content.length; i++) {
