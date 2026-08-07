@@ -6669,7 +6669,7 @@ if (typeof window !== 'undefined') {
     // ------------------------------------------------------------------
     // Renderer configuration (guarded — don't fight the host if already set)
     // ------------------------------------------------------------------
-    const BASE_EXPOSURE = 1.05;
+    const BASE_EXPOSURE = 0.86;
     if (renderer) {
       if (!renderer.shadowMap.enabled) renderer.shadowMap.enabled = true;
       if (renderer.shadowMap.type !== THREE.PCFSoftShadowMap) {
@@ -6709,7 +6709,7 @@ if (typeof window !== 'undefined') {
 
     // Mild clinical fog for depth (restored on dispose)
     const prevFog = scene.fog || null;
-    scene.fog = new THREE.FogExp2(0xe9e7e2, 0.045);
+    scene.fog = new THREE.FogExp2(0x232830, 0.05);
 
     // ==================================================================
     // LAYOUT CONSTANTS
@@ -6788,7 +6788,7 @@ if (typeof window !== 'undefined') {
     // Vertex colors: pale horizon at bottom -> soft blue at top. No texture files needed.
     {
       const skyGeo = G(new THREE.PlaneGeometry(winW + 0.4, bandH + 0.4, 1, 1));
-      const top = new THREE.Color(0x8fbbe0), bottom = new THREE.Color(0xe6edf2);
+      const top = new THREE.Color(0x27446e), bottom = new THREE.Color(0xd98e5f);
       const pos = skyGeo.getAttribute('position');
       const cols = [];
       for (let i = 0; i < pos.count; i++) {
@@ -6956,7 +6956,7 @@ if (typeof window !== 'undefined') {
 
     // --- Over-bed ceiling light fixture (emissive panel; PointLight does the lighting) ---
     const fixture = addBox(0.95, 0.06, 0.4, plasticMat, BED_X, ROOM_H - 0.03, BED_CZ + 0.1);
-    const fixturePanelMat = std({ color: 0xffffff, emissive: 0xfff2df, emissiveIntensity: 1.6, roughness: 0.3 });
+    const fixturePanelMat = std({ color: 0xffffff, emissive: 0xfff2df, emissiveIntensity: 1.0, roughness: 0.3 });
     const fixturePanel = addBox(0.85, 0.012, 0.32, fixturePanelMat, BED_X, ROOM_H - 0.065, BED_CZ + 0.1);
 
     // ==================================================================
@@ -6975,7 +6975,7 @@ if (typeof window !== 'undefined') {
     }
 
     // Warm key light: high front-side, tight soft shadows around the bed.
-    const key = new THREE.DirectionalLight(0xffe9d2, 2.4);
+    const key = new THREE.DirectionalLight(0xffd9ae, 1.15);
     key.position.set(2.4, 3.2, 1.6);
     key.target.position.set(BED_X, MATTRESS_TOP, BED_CZ - 0.3);
     key.castShadow = true;
@@ -6993,19 +6993,19 @@ if (typeof window !== 'undefined') {
     trackLight(key);
 
     // Cool ambient fill: sky vs floor bounce.
-    const hemi = new THREE.HemisphereLight(0xbfd2e4, 0x8e8072, 0.55);
+    const hemi = new THREE.HemisphereLight(0x5f7691, 0x3e3a34, 0.3);
     group.add(hemi);
     trackLight(hemi);
 
     // Soft overhead "area" light above the bed.
     // (PointLight instead of RectAreaLight — see perf note at top of file.)
-    const overhead = new THREE.PointLight(0xfff4e4, 6.0, 6.5, 2);
+    const overhead = new THREE.PointLight(0xffe8c6, 3.6, 6.5, 2);
     overhead.position.set(BED_X, ROOM_H - 0.35, BED_CZ + 0.1);
     group.add(overhead);
     trackLight(overhead);
 
     // Subtle practical from the headboard panel / IV corner.
-    const practical = new THREE.PointLight(0xcfe8d8, 1.4, 2.6, 2);
+    const practical = new THREE.PointLight(0xbfe4ff, 2.2, 3.0, 2);
     practical.position.set(BED_X - 0.2, 1.6, -ROOM_D / 2 + 0.25);
     group.add(practical);
     trackLight(practical);
