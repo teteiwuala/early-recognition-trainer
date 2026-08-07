@@ -4144,6 +4144,15 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   addEventListener('keydown', e => { if (setMoveKey(e, true))  e.preventDefault(); });
   addEventListener('keyup',   e => { if (setMoveKey(e, false)) e.preventDefault(); });
   addEventListener('blur', () => { moveKeys.f = moveKeys.b = moveKeys.l = moveKeys.r = false; });
+
+  // ---- scroll-wheel zoom (desktop): narrows/widens FOV like a camera lens.
+  // Only when the wheel is over the 3D canvas, never in VR (XR owns projection).
+  renderer.domElement.addEventListener('wheel', e => {
+    if (renderer.xr.isPresenting) return;
+    e.preventDefault();
+    camera.fov = Math.max(28, Math.min(85, camera.fov + (e.deltaY > 0 ? 3 : -3)));
+    camera.updateProjectionMatrix();
+  }, { passive: false });
   function applyWalk(dt) {
     if (renderer.xr.isPresenting) return;
     const fwd = (moveKeys.f ? 1 : 0) - (moveKeys.b ? 1 : 0);
@@ -4164,7 +4173,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     if (!orbit.orbiting || renderer.xr.isPresenting) return;
     orbit.moved = (orbit.moved || 0) + Math.abs(e.clientX-orbit.lx) + Math.abs(e.clientY-orbit.ly);
     yaw   -= (e.clientX - orbit.lx) * 0.004;
-    pitch = Math.max(-0.6, Math.min(0.4, pitch - (e.clientY - orbit.ly) * 0.004));
+    pitch = Math.max(-1.35, Math.min(1.35, pitch - (e.clientY - orbit.ly) * 0.004));
     orbit.lx = e.clientX; orbit.ly = e.clientY; applyLook();
   });
   const rayc = new THREE.Raycaster(), ndc = new THREE.Vector2();
